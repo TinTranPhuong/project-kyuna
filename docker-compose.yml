@@ -1,0 +1,72 @@
+version: "3.9"
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"              # Nginx serves React build on port 80
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      - VITE_API_URL=/api      # In prod, proxied through Nginx
+    networks:
+      - app_network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - backend_uploads:/app/uploads
+      - backend_db:/app/data
+    env_file:
+      - ./backend/.env
+    depends_on:
+      ai_server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - app_network
+
+  ai_server:
+    build:
+      context: ./ai_server
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./ai_server/models:/app/models:ro   # read-only model files
+    env_file:
+      - ./ai_server/.env
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]   # remove this block if no GPU
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/v1/health"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 120s            # give model time to load
+    networks:
+      - app_network
+
+volumes:
+  backend_uploads:
+  backend_db:
+
+networks:
+  app_network:
+    driver: bridge
