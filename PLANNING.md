@@ -423,7 +423,7 @@ personal-ai-website/                        # Root monorepo
 │       │   │   ├── Topbar.tsx
 │       │   │   └── ProtectedRoute.tsx
 │       │   │
-│       │   ├── 📁 timer/                   # Pomodoro + Stopwatch
+│       │   ├── 📁 timer/                  # Pomodoro + Stopwatch
 │       │   │   ├── PomodoroTimer.tsx
 │       │   │   ├── StopwatchTimer.tsx
 │       │   │   ├── TimerControls.tsx
