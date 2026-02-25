@@ -1,0 +1,28 @@
+﻿# CPU-only base (change to nvidia/cuda:12.1.0-devel-ubuntu22.04 for GPU)
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y \
+    gcc g++ make cmake curl \
+    libopenblas-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt .
+
+# Install llama-cpp-python — for GPU build, add:
+# CMAKE_ARGS="-DLLAMA_CUBLAS=on"
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+# Models directory (will be mounted as volume in compose)
+RUN mkdir -p /app/models
+
+EXPOSE 8001
+
+# model loading can take 60-120 seconds — start_period handles this
+HEALTHCHECK --interval=60s --timeout=30s --start-period=120s \
+  CMD curl -f http://localhost:8001/v1/health || exit 1
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001"]
