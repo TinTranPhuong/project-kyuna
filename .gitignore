@@ -1,0 +1,51 @@
+﻿# Node
+node_modules/
+dist/
+.cache/
+.parcel-cache/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+.venv/
+env/
+*.egg-info/
+.pytest_cache/
+
+# Environment & Secrets (CRITICAL — never commit these)
+.env
+.env.local
+.env.production
+*.env
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Large AI model files (GGUF can be 4–8GB each)
+*.gguf
+*.ggml
+*.bin
+
+# Uploads and output files (user data, not source code)
+backend/uploads/
+ai_server/models/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+.idea/
+*.swp
+
+# Docker
+docker/data/
+
+# Build outputs
+frontend/dist/
