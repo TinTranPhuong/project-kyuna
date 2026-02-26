@@ -54,7 +54,17 @@ export const ChatWindow = () => {
     >
       {/* 1. Render historic messages for the active conversation */}
       {currentMessages.map((msg) => (
-        <ChatMessage key={msg.id} message={msg} />
+        <ChatMessage 
+          key={msg.id} 
+          message={{
+          ...msg,
+          // 1. Fallback for the missing timestamp
+          timestamp: (msg as any).timestamp || new Date().toISOString(),
+      
+          // 2. Convert null to undefined for tokens_used
+          tokens_used: msg.tokens_used ?? undefined 
+          }} 
+        />
       ))}
 
       {/* 2. Render live streaming message (if currently generating) */}

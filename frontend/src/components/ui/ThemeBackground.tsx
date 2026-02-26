@@ -53,7 +53,7 @@ export const ThemeBackground = () => {
         )}
       </AnimatePresence>
 
-      /* --- Readability Overlay --- */
+      {/* --- Readability Overlay --- */}
       {/* This ensures the glass morphism UI and text always have enough contrast */}
       <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px]" />
     </div>

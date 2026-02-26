@@ -1,114 +1,113 @@
-import { useState, useEffect, FormEvent } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import { Loader2, AlertCircle } from 'lucide-react';
+import { useState, useEffect, type FormEvent, type ChangeEvent, type FocusEvent } from 'react'
+import { useNavigate, Link } from 'react-router-dom'
+import { Loader2, AlertCircle } from 'lucide-react'
+import type { AxiosError } from 'axios'
+import { useAuthStore } from '@/store/authStore'
+import { authService } from '@/services/auth.service'
 
-import { useAuthStore } from '@/store/authStore';
-import { authService } from '@/services/auth.service';
+const INIT_FORM    = { username: '', email: '', password: '', confirmPassword: '' }
+const INIT_TOUCHED = { username: false, email: false, password: false, confirmPassword: false }
+const INIT_ERRORS  = { username: '', email: '', password: '', confirmPassword: '' }
 
 export default function RegisterPage() {
-  const navigate = useNavigate();
-  const setUser = useAuthStore((state) => state.setUser);
+  const navigate = useNavigate()
 
-  const [formData, setFormData] = useState({
-    username: '',
-    email: '',
-    password: '',
-    confirmPassword: '',
-  });
+  // BUG 1 FIXED: use authStore.login (not setUser).
+  // After register, the backend returns { user, access_token, refresh_token }.
+  // setUser() only sets the user object — it discards both tokens, so the
+  // axios interceptor has nothing to attach to subsequent requests → instant 401.
+  const login = useAuthStore(state => state.login)
 
-  const [touched, setTouched] = useState({
-    username: false,
-    email: false,
-    password: false,
-    confirmPassword: false,
-  });
+  const [formData, setFormData] = useState(INIT_FORM)
+  const [touched,  setTouched]  = useState(INIT_TOUCHED)
+  const [errors,   setErrors]   = useState(INIT_ERRORS)
+  const [isLoading, setIsLoading] = useState(false)
+  const [apiError,  setApiError]  = useState('')
 
-  const [errors, setErrors] = useState({
-    username: '',
-    email: '',
-    password: '',
-    confirmPassword: '',
-  });
-
-  const [isLoading, setIsLoading] = useState(false);
-  const [apiError, setApiError] = useState('');
-
+  // Real-time validation whenever field values or touched flags change
   useEffect(() => {
-    const newErrors = { username: '', email: '', password: '', confirmPassword: '' };
+    const next = { ...INIT_ERRORS }
 
     if (touched.username) {
       if (formData.username.length < 3 || formData.username.length > 20) {
-        newErrors.username = 'Username must be 3–20 characters.';
-      } else if (!/^[a-zA-Z0-9]+$/.test(formData.username)) {
-        newErrors.username = 'Username can only contain letters and numbers.';
+        next.username = 'Username must be 3–20 characters.'
+      } else if (!/^[a-zA-Z0-9_]+$/.test(formData.username)) {
+        next.username = 'Username can only contain letters, numbers, and underscores.'
       }
     }
 
     if (touched.email && !/^\S+@\S+\.\S+$/.test(formData.email)) {
-      newErrors.email = 'Please enter a valid email address.';
+      next.email = 'Please enter a valid email address.'
     }
 
     if (touched.password) {
       if (formData.password.length < 8) {
-        newErrors.password = 'Password must be at least 8 characters.';
+        next.password = 'Password must be at least 8 characters.'
       } else if (!/\d/.test(formData.password)) {
-        newErrors.password = 'Password must contain at least one number.';
+        next.password = 'Password must contain at least one number.'
       }
     }
 
-    if (touched.confirmPassword || formData.confirmPassword) {
-      if (formData.password !== formData.confirmPassword) {
-        newErrors.confirmPassword = 'Passwords do not match.';
-      }
+    if (touched.confirmPassword && formData.password !== formData.confirmPassword) {
+      next.confirmPassword = 'Passwords do not match.'
     }
 
-    setErrors(newErrors);
-  }, [formData, touched]);
+    setErrors(next)
+  }, [formData, touched])
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { name, value } = e.target;
-    setFormData((prev) => ({ ...prev, [name]: value }));
-    setTouched((prev) => ({ ...prev, [name]: true }));
-  };
+  const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target
+    setFormData(prev => ({ ...prev, [name]: value }))
+    setTouched(prev  => ({ ...prev, [name]: true  }))
+  }
 
-  const handleBlur = (e: React.FocusEvent<HTMLInputElement>) => {
-    setTouched((prev) => ({ ...prev, [e.target.name]: true }));
-  };
+  const handleBlur = (e: FocusEvent<HTMLInputElement>) => {
+    setTouched(prev => ({ ...prev, [e.target.name]: true }))
+  }
 
   const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    setApiError('');
+    e.preventDefault()
+    setApiError('')
+    // Touch all fields to surface any un-touched validation errors
+    setTouched({ username: true, email: true, password: true, confirmPassword: true })
 
-    setTouched({
-      username: true,
-      email: true,
-      password: true,
-      confirmPassword: true,
-    });
+    const hasErrors = Object.values(errors).some(err => err !== '')
+    const allFilled = Object.values(formData).every(val => val.trim() !== '')
+    if (hasErrors || !allFilled) return
 
-    const hasErrors = Object.values(errors).some((err) => err !== '');
-    const isReady = Object.values(formData).every((val) => val.trim() !== '');
-    
-    if (hasErrors || !isReady) return;
-
-    setIsLoading(true);
-
+    setIsLoading(true)
     try {
-      const user = await authService.register({
-        username: formData.username,
-        email: formData.email,
-        password: formData.password,
-      });
-      
-      setUser(user);
-      navigate('/', { replace: true });
-      
-    } catch (err: any) {
-      setApiError(err.response?.data?.message || 'Registration failed. Please try again.');
+      // BUG 2 FIXED: authService.register takes THREE positional args
+      // (username, email, password), NOT a single object. Passing an object
+      // makes username receive the whole object and email/password = undefined
+      // → 422 Unprocessable Entity on every registration attempt.
+      const response = await authService.register(
+        formData.username,
+        formData.email,
+        formData.password,
+      )
+
+      // BUG 1 CONTINUED: store user + both tokens, not just the user
+      login(response.user, response.access_token, response.refresh_token)
+      navigate('/', { replace: true })
+    } catch (err) {
+      // BUG 3 FIXED: err:any → typed AxiosError (ESLint no-explicit-any violation)
+      // BUG 4 FIXED: FastAPI returns { detail: string }, NOT { message: string }
+      const axiosErr = err as AxiosError<{ detail: string }>
+      setApiError(
+        axiosErr.response?.data?.detail ?? 'Registration failed. Please try again.'
+      )
     } finally {
-      setIsLoading(false);
+      setIsLoading(false)
     }
-  };
+  }
+
+  const fields = [
+    { id: 'username',        label: 'Username',         type: 'text',     autoComplete: 'username',     placeholder: 'johndoe123' },
+    { id: 'email',           label: 'Email',            type: 'email',    autoComplete: 'email',        placeholder: 'name@example.com' },
+    { id: 'password',        label: 'Password',         type: 'password', autoComplete: 'new-password', placeholder: '••••••••' },
+    { id: 'confirmPassword', label: 'Confirm Password', type: 'password', autoComplete: 'new-password', placeholder: '••••••••' },
+  ] as const
 
   return (
     <>
@@ -120,88 +119,45 @@ export default function RegisterPage() {
       <form onSubmit={handleSubmit} className="space-y-5" noValidate>
         {apiError && (
           <div className="bg-red-500/20 border border-red-500/50 rounded-lg p-3 flex items-start gap-2 text-red-200 text-sm">
-            <AlertCircle className="w-5 h-5 shrink-0" />
+            <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
             <p>{apiError}</p>
           </div>
         )}
 
-        <div className="space-y-1">
-          <label className="text-sm font-medium text-white/90 ml-1" htmlFor="username">Username</label>
-          <input
-            id="username"
-            name="username"
-            type="text"
-            value={formData.username}
-            onChange={handleChange}
-            onBlur={handleBlur}
-            className={`glass-input ${errors.username ? 'border-red-500/50 focus:ring-red-500/30' : ''}`}
-            placeholder="johndoe123"
-            disabled={isLoading}
-          />
-          {errors.username && <p className="text-red-400 text-xs ml-1">{errors.username}</p>}
-        </div>
-
-        <div className="space-y-1">
-          <label className="text-sm font-medium text-white/90 ml-1" htmlFor="email">Email</label>
-          <input
-            id="email"
-            name="email"
-            type="email"
-            value={formData.email}
-            onChange={handleChange}
-            onBlur={handleBlur}
-            className={`glass-input ${errors.email ? 'border-red-500/50 focus:ring-red-500/30' : ''}`}
-            placeholder="name@example.com"
-            disabled={isLoading}
-          />
-          {errors.email && <p className="text-red-400 text-xs ml-1">{errors.email}</p>}
-        </div>
-
-        <div className="space-y-1">
-          <label className="text-sm font-medium text-white/90 ml-1" htmlFor="password">Password</label>
-          <input
-            id="password"
-            name="password"
-            type="password"
-            value={formData.password}
-            onChange={handleChange}
-            onBlur={handleBlur}
-            className={`glass-input ${errors.password ? 'border-red-500/50 focus:ring-red-500/30' : ''}`}
-            placeholder="••••••••"
-            disabled={isLoading}
-          />
-          {errors.password && <p className="text-red-400 text-xs ml-1">{errors.password}</p>}
-        </div>
-
-        <div className="space-y-1">
-          <label className="text-sm font-medium text-white/90 ml-1" htmlFor="confirmPassword">Confirm Password</label>
-          <input
-            id="confirmPassword"
-            name="confirmPassword"
-            type="password"
-            value={formData.confirmPassword}
-            onChange={handleChange}
-            onBlur={handleBlur}
-            className={`glass-input ${errors.confirmPassword ? 'border-red-500/50 focus:ring-red-500/30' : ''}`}
-            placeholder="••••••••"
-            disabled={isLoading}
-          />
-          {errors.confirmPassword && <p className="text-red-400 text-xs ml-1">{errors.confirmPassword}</p>}
-        </div>
+        {fields.map(field => (
+          <div key={field.id} className="space-y-1">
+            <label className="text-sm font-medium text-white/90 ml-1" htmlFor={field.id}>
+              {field.label}
+            </label>
+            <input
+              id={field.id}
+              name={field.id}
+              type={field.type}
+              autoComplete={field.autoComplete}
+              value={formData[field.id]}
+              onChange={handleChange}
+              onBlur={handleBlur}
+              className={`glass-input ${errors[field.id] ? 'border-red-500/50 focus:ring-red-500/30' : ''}`}
+              placeholder={field.placeholder}
+              disabled={isLoading}
+            />
+            {errors[field.id] && (
+              <p className="text-red-400 text-xs ml-1">{errors[field.id]}</p>
+            )}
+          </div>
+        ))}
 
         <button
           type="submit"
-          disabled={isLoading || Object.values(errors).some(err => err !== '')}
+          disabled={isLoading || Object.values(errors).some(e => e !== '')}
           className="btn-primary w-full flex items-center justify-center gap-2 mt-2 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {isLoading ? (
             <>
               <Loader2 className="w-5 h-5 animate-spin" />
-              Registering...
+              Registering…
             </>
-          ) : (
-            'Create Account'
-          )}
+          ) : 'Create Account'}
         </button>
       </form>
 
@@ -212,5 +168,5 @@ export default function RegisterPage() {
         </Link>
       </div>
     </>
-  );
+  )
 }

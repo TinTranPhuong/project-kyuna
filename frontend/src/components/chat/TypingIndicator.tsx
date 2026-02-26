@@ -43,7 +43,7 @@ export const TypingIndicator = () => {
         </div>
         
         <span className="text-[10px] text-white/20 font-medium px-1 uppercase tracking-widest">
-          Luna is thinking
+          Kyuna is thinking
         </span>
       </div>
     </div>

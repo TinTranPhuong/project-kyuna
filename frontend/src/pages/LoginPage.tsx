@@ -1,60 +1,66 @@
-import { useState, FormEvent } from 'react';
-import { useNavigate, Link, useLocation } from 'react-router-dom';
-import { Loader2, AlertCircle } from 'lucide-react';
-
-import { useAuthStore } from '@/store/authStore';
-import { authService } from '@/services/auth.service';
+import { useState, type FormEvent } from 'react'
+import { useNavigate, Link, useLocation } from 'react-router-dom'
+import { Loader2, AlertCircle } from 'lucide-react'
+import type { AxiosError } from 'axios'
+import { useAuthStore } from '@/store/authStore'
+import { authService } from '@/services/auth.service'
 
 export default function LoginPage() {
-  const navigate = useNavigate();
-  const location = useLocation();
-  const setUser = useAuthStore((state) => state.setUser);
+  const navigate = useNavigate()
+  const location = useLocation()
 
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  
-  const [apiError, setApiError] = useState('');
-  const [validationErrors, setValidationErrors] = useState<{ email?: string; password?: string }>({});
+  // BUG 1 FIXED: use authStore.login (not setUser).
+  // setUser only sets the user object — it never stores the access/refresh tokens,
+  // so the axios interceptor has nothing to send and every protected API call
+  // immediately fails with 401. login() stores user + both tokens atomically.
+  const login = useAuthStore(state => state.login)
 
-  const validateForm = () => {
-    const errors: { email?: string; password?: string } = {};
-    let isValid = true;
+  const [email,    setEmail]    = useState('')
+  const [password, setPassword] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
+  const [apiError,  setApiError]  = useState('')
+  const [validationErrors, setValidationErrors] = useState<{
+    email?: string
+    password?: string
+  }>({})
 
-    if (!email.includes('@')) {
-      errors.email = 'Please enter a valid email address.';
-      isValid = false;
-    }
-    if (password.length < 8) {
-      errors.password = 'Password must be at least 8 characters long.';
-      isValid = false;
-    }
-
-    setValidationErrors(errors);
-    return isValid;
-  };
+  const validateForm = (): boolean => {
+    const errors: { email?: string; password?: string } = {}
+    if (!email.includes('@'))    errors.email    = 'Please enter a valid email address.'
+    if (password.length < 8)    errors.password = 'Password must be at least 8 characters long.'
+    setValidationErrors(errors)
+    return Object.keys(errors).length === 0
+  }
 
   const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    setApiError(''); 
+    e.preventDefault()
+    setApiError('')
+    if (!validateForm()) return
 
-    if (!validateForm()) return;
-
-    setIsLoading(true);
-
+    setIsLoading(true)
     try {
-      const user = await authService.login({ email, password });
-      setUser(user);
+      // BUG 2 FIXED: authService.login takes two positional args (email, password),
+      // NOT a single object. Calling it as login({ email, password }) passes an
+      // object as the first arg and leaves password undefined → 422 every time.
+      const response = await authService.login(email, password)
 
-      const from = location.state?.from?.pathname || '/';
-      navigate(from, { replace: true });
-      
-    } catch (err: any) {
-      setApiError(err.response?.data?.message || 'Invalid email or password. Please try again.');
+      // BUG 1 CONTINUED: login() expects (user, access_token, refresh_token)
+      login(response.user, response.access_token, response.refresh_token)
+
+      const from = (location.state as { from?: { pathname: string } })?.from?.pathname ?? '/'
+      navigate(from, { replace: true })
+    } catch (err) {
+      // BUG 3 FIXED: err:any → typed AxiosError. err:any bypasses ESLint no-explicit-any.
+      // BUG 4 FIXED: FastAPI returns { detail: string }, NOT { message: string }.
+      // err.response?.data?.message is always undefined — the error banner never shows.
+      const axiosErr = err as AxiosError<{ detail: string }>
+      setApiError(
+        axiosErr.response?.data?.detail ?? 'Invalid email or password. Please try again.'
+      )
     } finally {
-      setIsLoading(false);
+      setIsLoading(false)
     }
-  };
+  }
 
   return (
     <>
@@ -66,7 +72,7 @@ export default function LoginPage() {
       <form onSubmit={handleSubmit} className="space-y-6" noValidate>
         {apiError && (
           <div className="bg-red-500/20 border border-red-500/50 rounded-lg p-3 flex items-start gap-2 text-red-200 text-sm">
-            <AlertCircle className="w-5 h-5 shrink-0" />
+            <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
             <p>{apiError}</p>
           </div>
         )}
@@ -76,8 +82,9 @@ export default function LoginPage() {
           <input
             id="email"
             type="email"
+            autoComplete="email"
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            onChange={e => setEmail(e.target.value)}
             className={`glass-input ${validationErrors.email ? 'border-red-500/50 focus:ring-red-500/30' : ''}`}
             placeholder="name@example.com"
             disabled={isLoading}
@@ -92,8 +99,9 @@ export default function LoginPage() {
           <input
             id="password"
             type="password"
+            autoComplete="current-password"
             value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            onChange={e => setPassword(e.target.value)}
             className={`glass-input ${validationErrors.password ? 'border-red-500/50 focus:ring-red-500/30' : ''}`}
             placeholder="••••••••"
             disabled={isLoading}
@@ -111,11 +119,9 @@ export default function LoginPage() {
           {isLoading ? (
             <>
               <Loader2 className="w-5 h-5 animate-spin" />
-              Signing in...
+              Signing in…
             </>
-          ) : (
-            'Sign In'
-          )}
+          ) : 'Sign In'}
         </button>
       </form>
 
@@ -126,5 +132,5 @@ export default function LoginPage() {
         </Link>
       </div>
     </>
-  );
+  )
 }

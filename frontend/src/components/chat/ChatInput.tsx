@@ -76,7 +76,7 @@ export const ChatInput = () => {
             value={content}
             onChange={(e) => setContent(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={isStreaming ? "Assistant is thinking..." : "Ask Luna anything..."}
+            placeholder={isStreaming ? "Assistant is thinking..." : "Ask Kyuna anything..."}
             disabled={isStreaming}
             className={cn(
               "flex-1 bg-transparent border-none outline-none text-white text-sm py-2 px-3 resize-none custom-scrollbar",

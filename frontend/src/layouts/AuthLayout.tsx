@@ -27,7 +27,7 @@ export default function AuthLayout() {
             <Moon className="w-6 h-6 text-primary-400" />
           </div>
           <h1 className="text-2xl font-display font-bold text-white tracking-wide">
-            Project Luna
+            Project Kyuna
           </h1>
         </div>
 

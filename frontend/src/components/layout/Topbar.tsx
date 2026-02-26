@@ -19,10 +19,10 @@ export const Topbar = () => {
   const user   = useAuthStore(state => state.user)
   const logout = useAuthStore(state => state.logout)
 
-  const greeting = useGreeting(user?.username ?? 'User')
+  const { greeting, emoji } = useGreeting();
   const navigate  = useNavigate()
 
-  const [time, setTime]               = useState(new Date())
+  const [time, setTime] = useState(new Date())
   const [showDropdown, setShowDropdown] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
 
@@ -66,6 +66,8 @@ export const Topbar = () => {
       {/* ── Left: Greeting ─────────────────────────────────────────────────── */}
       <h1 className="text-white/90 font-medium tracking-tight">
         {greeting}
+        {emoji}
+        {user?.username}
       </h1>
 
       {/* ── Right: Clock + Avatar ───────────────────────────────────────────── */}

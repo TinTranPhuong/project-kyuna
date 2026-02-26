@@ -4,7 +4,7 @@ import { Home } from 'lucide-react';
 
 // Store and Components
 import { useAuthStore } from '@/store/authStore';
-import ThemeBackground from '@/components/ThemeBackground';
+import ThemeBackground from '@/components/ui/ThemeBackground';
 
 export default function NotFoundPage() {
   const navigate = useNavigate();

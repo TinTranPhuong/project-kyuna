@@ -2,7 +2,10 @@ import type { Config } from 'tailwindcss'
 
 export default {
   // Scans your HTML and React files to purge unused CSS in production
-  content: ['./index.html', './src/**/*.{ts,tsx}'],
+  content: [
+    "./index.html",
+    "./src/**/*.{js,ts,jsx,tsx}"
+  ],
   theme: {
     extend: {
       colors: {

@@ -13,6 +13,7 @@ export interface Message {
   conversation_id: string
   role: 'user' | 'assistant' | 'system'
   content: string
+  timestamp: string;
   tokens_used: number | null
   generation_ms: number | null
   model_used: string | null
@@ -28,4 +29,6 @@ export interface ModelInfo {
   name: string
   file_size_gb: number | null
   type: 'text' | 'vision'
+  size?: string; 
+  context_window?: number;
 }

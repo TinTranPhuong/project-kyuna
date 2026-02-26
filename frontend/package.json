@@ -34,6 +34,7 @@
     "zustand": "^4.5.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "@tanstack/react-query-devtools": "^5.91.3",
     "@testing-library/react": "latest",
     "@testing-library/user-event": "latest",
@@ -41,11 +42,11 @@
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
     "@vitejs/plugin-react": "latest",
-    "autoprefixer": "latest",
+    "autoprefixer": "^10.4.27",
     "eslint": "latest",
-    "postcss": "latest",
+    "postcss": "^8.5.6",
     "prettier": "latest",
-    "tailwindcss": "latest",
+    "tailwindcss": "^3.4.19",
     "typescript": "latest",
     "vite": "latest",
     "vitest": "latest"

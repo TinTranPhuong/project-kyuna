@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <!-- ── Primary Meta ─────────────────────────────────────────────────────── -->
+    <title>MyAI Space</title>
+    <meta name="description" content="Your personal AI workspace — local chat, manga translation, and focused productivity in one place." />
+    <meta name="theme-color" content="#0d9488" />
+    <meta name="color-scheme" content="dark" />
+
+    <!-- ── Favicon ──────────────────────────────────────────────────────────── -->
+    <!--
+      Drop these files into /public/:
+        favicon.ico             (32×32, legacy browsers)
+        favicon.svg             (scalable, modern browsers)
+        apple-touch-icon.png    (180×180, iOS home screen)
+        site.webmanifest        (PWA metadata)
+    -->
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+
+    <!-- ── Open Graph (link previews) ──────────────────────────────────────── -->
+    <meta property="og:type"        content="website" />
+    <meta property="og:title"       content="MyAI Space" />
+    <meta property="og:description" content="Your personal AI workspace — local chat, manga translation, and focused productivity in one place." />
+    <meta property="og:image"       content="/og-image.png" />
+
+    <!-- ── Google Fonts ─────────────────────────────────────────────────────── -->
+    <!--
+      Three font families to match tailwind.config.ts:
+        Inter        → font-sans  (body copy, UI elements)
+        Outfit       → font-display (headings, branding)
+        JetBrains Mono → font-mono (code blocks, timer display, clock)
+
+      preconnect speeds up the DNS + TLS handshake before the stylesheet
+      is parsed, shaving ~100–300ms off first-load font delivery.
+    -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- ── Flash-of-Unstyled-Content prevention ─────────────────────────────── -->
+    <!--
+      The app is dark-only. Setting the background here stops the browser
+      from flashing a white background while React loads and paints.
+      surface-900 = #0f172a (matches tailwind.config.ts).
+    -->
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        background-color: #0f172a;
+        color: #f8fafc;
+        /* Font stack mirrors tailwind fontFamily.sans so text renders
+           correctly even before the stylesheet bundle is evaluated */
+        font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+      }
+
+      /* Full-height layout for the React root — prevents scrollbar flicker */
+      #root {
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+    </style>
+  </head>
+
+  <body>
+    <!-- React mounts here. The div must have id="root" to match main.tsx. -->
+    <div id="root"></div>
+
+    <!-- ── No-Script Fallback ─────────────────────────────────────────────── -->
+    <noscript>
+      <div style="
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        font-family: ui-sans-serif, system-ui, sans-serif;
+        font-size: 1rem;
+        color: #94a3b8;
+        background-color: #0f172a;
+        text-align: center;
+        padding: 2rem;
+      ">
+        <p>
+          MyAI Space requires JavaScript to run.<br />
+          Please enable JavaScript in your browser settings and reload the page.
+        </p>
+      </div>
+    </noscript>
+
+    <!-- ── Entry Point ───────────────────────────────────────────────────────── -->
+    <!--
+      Vite replaces this script tag at build time with the hashed bundle.
+      type="module" is required — the entire codebase uses ES module syntax.
+    -->
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
