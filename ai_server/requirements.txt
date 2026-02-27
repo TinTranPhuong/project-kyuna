@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+pydantic-settings
+easyocr
+Pillow
+numpy
+nvidia-ml-py
+
+# Custom CUDA 13.0 Wheel with Qwen3 Vision Support for Python 3.11
+llama_cpp_python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.27-cu130-Basic-win-20260223/llama_cpp_python-0.3.27+cu130.basic-cp311-cp311-win_amd64.whl
+

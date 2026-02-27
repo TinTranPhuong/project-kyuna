@@ -33,7 +33,7 @@ env/
 
 # Uploads and output files (user data, not source code)
 backend/uploads/
-ai_server/models/
+ai_server/models/*
 
 # OS
 .DS_Store

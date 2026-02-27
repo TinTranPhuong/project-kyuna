@@ -1,0 +1,17 @@
+[project]
+name = "kyuna-backend"
+version = "0.1.0"
+description = "FastAPI Backend for Kyuna Space"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = "test_*.py"
+addopts = "-v --disable-warnings"
+
+[tool.ruff]
+# Optional: Standard linter settings if you decide to use Ruff
+line-length = 88
+target-version = "py311"
+extend-exclude = ["migrations"]
