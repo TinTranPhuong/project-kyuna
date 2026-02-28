@@ -5,10 +5,29 @@ from typing import AsyncGenerator
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
+from sqlalchemy.orm import selectinload
 
 from app.models.chat import ChatConversation, ChatMessage
-from app.schemas.chat import CreateConversationRequest, SendMessageRequest
+from app.schemas.chat import CreateConversationRequest, ChatMessageRequest
 from app.utils.ai_client import ai_client
+
+
+async def get_available_models() -> list[dict]:
+    """Fetches available models from the local AI inference server."""
+    try:
+        return await ai_client.list_models()
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, 
+            detail=f"AI Server is unreachable: {str(e)}"
+        )
+
+async def get_fallback_model() -> str:
+    """Dynamically grabs the first available loaded model from your AI Server."""
+    models = await get_available_models()
+    if models and len(models) > 0:
+        return models[0].get("id", "")
+    return ""
 
 
 async def create_conversation(db: AsyncSession, user_id: str, data: CreateConversationRequest) -> ChatConversation:
@@ -40,14 +59,15 @@ async def get_conversation_detail(db: AsyncSession, user_id: str, conversation_i
     stmt = select(ChatConversation).where(
         ChatConversation.id == conversation_id,
         ChatConversation.user_id == user_id
-    )
+    ).options(selectinload(ChatConversation.messages)) 
+    
     result = await db.execute(stmt)
     conversation = result.scalar_one_or_none()
     
     if not conversation:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
         
-    return conversation # The ORM relationship will automatically load messages based on schema config
+    return conversation
 
 
 async def update_conversation(db: AsyncSession, user_id: str, conversation_id: str, data: CreateConversationRequest, is_archived: bool = None) -> ChatConversation:
@@ -107,7 +127,7 @@ async def save_message(db: AsyncSession, conversation_id: str, role: str, conten
     return message
 
 
-async def verify_and_save_user_message(db: AsyncSession, user_id: str, conversation_id: str, data: SendMessageRequest) -> None:
+async def verify_and_save_user_message(db: AsyncSession, user_id: str, conversation_id: str, data: ChatMessageRequest) -> None:
     """Validates the conversation and saves the incoming user message."""
     stmt = select(ChatConversation).where(ChatConversation.id == conversation_id, ChatConversation.user_id == user_id)
     conversation = (await db.execute(stmt)).scalar_one_or_none()
@@ -119,27 +139,30 @@ async def verify_and_save_user_message(db: AsyncSession, user_id: str, conversat
     
     # Auto-title on the very first user message
     if conversation.message_count == 1 and conversation.title == "New Conversation":
-        # We fire and forget this or await it. Awaiting is safer for DB locks.
-        await auto_title_conversation(db, conversation, data.content, data.model)
+        await auto_title_conversation(db, conversation, data.content, data.model_used)
 
 
 async def auto_title_conversation(db: AsyncSession, conversation: ChatConversation, first_user_message: str, model: str) -> None:
     """Asks the AI for a short title and updates the conversation."""
-    target_model = model or conversation.model_used or "llama-3.1-8b-instruct-q4_k_m.gguf"
+    target_model = model or conversation.model_used
+    if not target_model:
+        target_model = await get_fallback_model()
+        
     prompt = f"Summarize this message in 5 words or less for a chat title. Output ONLY the title, no quotes or intro: {first_user_message}"
-    
     messages = [{"role": "user", "content": prompt}]
     
     title_chunks = []
-    # Using the stream endpoint but consuming it locally
-    async for chunk in ai_client.chat_stream(messages, target_model, max_tokens=10):
-        title_chunks.append(chunk)
+    try:
+        async for chunk in ai_client.chat_stream(messages, target_model, max_tokens=10):
+            title_chunks.append(chunk)
+            
+        generated_title = "".join(title_chunks).strip().strip('"').strip("'")
         
-    generated_title = "".join(title_chunks).strip().strip('"').strip("'")
-    
-    if generated_title:
-        conversation.title = generated_title
-        await db.commit()
+        if generated_title:
+            conversation.title = generated_title
+            await db.commit()
+    except Exception as e:
+        print(f"Failed to auto-title conversation: {e}")
 
 
 async def stream_chat_response(db: AsyncSession, user_id: str, conversation_id: str, requested_model: str) -> AsyncGenerator[str, None]:
@@ -147,11 +170,18 @@ async def stream_chat_response(db: AsyncSession, user_id: str, conversation_id: 
     Streams the AI response back to the client via Server-Sent Events (SSE).
     Once finished, saves the complete AI response to the database.
     """
-    # 1. Fetch full conversation history
-    stmt = select(ChatConversation).where(ChatConversation.id == conversation_id, ChatConversation.user_id == user_id)
+    # 1. Fetch full conversation history WITH messages eager loaded
+    stmt = select(ChatConversation).where(
+        ChatConversation.id == conversation_id, 
+        ChatConversation.user_id == user_id
+    ).options(selectinload(ChatConversation.messages)) 
+    
     conversation = (await db.execute(stmt)).scalar_one()
     
-    target_model = requested_model or conversation.model_used or "llama-3.1-8b-instruct-q4_k_m.gguf"
+    # Dynamically select the model
+    target_model = requested_model or conversation.model_used
+    if not target_model:
+        target_model = await get_fallback_model()
     
     # Build payload for AI Server
     messages_payload = []
@@ -183,8 +213,6 @@ async def stream_chat_response(db: AsyncSession, user_id: str, conversation_id: 
         if full_response:
             generation_ms = int((time.time() - start_time) * 1000)
             
-            # Note: We need a fresh session for the background save if the main transaction is locked, 
-            # but since we're streaming, the DB connection is still active.
             await save_message(
                 db=db,
                 conversation_id=conversation_id,
@@ -193,13 +221,3 @@ async def stream_chat_response(db: AsyncSession, user_id: str, conversation_id: 
                 generation_ms=generation_ms,
                 model=target_model
             )
-    
-async def get_available_models() -> list[dict]:
-    #Fetches available models from the local AI inference server.
-    try:
-        return await ai_client.list_models()
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, 
-            detail=f"AI Server is unreachable: {str(e)}"
-        )

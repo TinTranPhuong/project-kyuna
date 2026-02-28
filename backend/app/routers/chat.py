@@ -1,7 +1,8 @@
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+from uuid import UUID
 
 from app.core.database import get_db
 from app.dependencies.auth import get_current_user
@@ -11,7 +12,8 @@ from app.schemas.chat import (
     ConversationResponse,
     ConversationDetailResponse,
     SendMessageRequest,
-    ModelInfoResponse,
+    ModelInfoResponse, 
+    ChatMessageRequest,
 )
 from app.services import chat_service
 
@@ -20,11 +22,15 @@ router = APIRouter()
 
 @router.post("/conversations", response_model=ConversationResponse, status_code=status.HTTP_201_CREATED)
 async def create_conversation(
-    data: CreateConversationRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    data: CreateConversationRequest = None,  # Make the body completely optional
 ):
     """Initialize a new chat conversation."""
+    # If the frontend sent no body at all, initialize a default empty request
+    if data is None:
+        data = CreateConversationRequest()
+        
     return await chat_service.create_conversation(db, current_user.id, data)
 
 
@@ -41,7 +47,7 @@ async def list_conversations(
 
 @router.get("/conversations/{conversation_id}", response_model=ConversationDetailResponse)
 async def get_conversation(
-    conversation_id: str,
+    conversation_id: UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -51,7 +57,7 @@ async def get_conversation(
 
 @router.patch("/conversations/{conversation_id}", response_model=ConversationResponse)
 async def update_conversation(
-    conversation_id: str,
+    conversation_id: UUID,
     data: CreateConversationRequest, # Reusing schema for title/prompt updates
     is_archived: bool = None,
     current_user: User = Depends(get_current_user),
@@ -63,10 +69,10 @@ async def update_conversation(
 
 @router.delete("/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_conversation(
-    conversation_id: str,
+    conversation_id: UUID, 
     hard_delete: bool = False,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db)
 ):
     """Soft delete (archive) or hard delete a conversation."""
     await chat_service.delete_conversation(db, current_user.id, conversation_id, hard_delete)
@@ -75,10 +81,11 @@ async def delete_conversation(
 
 @router.post("/conversations/{conversation_id}/messages")
 async def send_message(
-    conversation_id: str,
-    data: SendMessageRequest,
+    conversation_id: UUID,  # <-- FastAPI will now auto-convert the string to a UUID object!
+    request: Request,
+    data: ChatMessageRequest,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Send a message and stream the AI's response via Server-Sent Events (SSE).
@@ -89,7 +96,7 @@ async def send_message(
     # 3, 4, 5, 6, 7 & 8: The generator function handles building history, 
     # proxying the AI server stream, yielding SSE, and saving the final result.
     return StreamingResponse(
-        chat_service.stream_chat_response(db, current_user.id, conversation_id, data.model),
+        chat_service.stream_chat_response(db, current_user.id, conversation_id, data.model_used),
         media_type="text/event-stream"
     )
 

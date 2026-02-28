@@ -1,12 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, AlertCircle } from 'lucide-react';
+import { Send } from 'lucide-react';
 import { useChatStore } from '@/store/chatStore';
 import { cn } from '@/lib/utils';
 
 export const ChatInput = () => {
   const [content, setContent] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  
   const { sendMessage, isStreaming } = useChatStore();
 
   const CHAR_WARN = 2000;
@@ -23,16 +22,10 @@ export const ChatInput = () => {
 
   const handleSubmit = async () => {
     if (!content.trim() || isStreaming || content.length > CHAR_LIMIT) return;
-
     const messageToSend = content.trim();
     setContent(''); 
-    
-    try {
-      await sendMessage(messageToSend);
-    } catch (error) {
-      console.error("Failed to send message:", error);
-      setContent(messageToSend); 
-    }
+    try { await sendMessage(messageToSend); } 
+    catch (error) { setContent(messageToSend); }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -46,29 +39,22 @@ export const ChatInput = () => {
   const isNearLimit = content.length > CHAR_WARN && content.length <= CHAR_LIMIT;
 
   return (
-    <div className="p-4 border-t border-white/10 bg-surface-950/50 backdrop-blur-md">
-      <div className="max-w-4xl mx-auto relative">
+    <div className="w-full relative">
         
         {content.length > 1500 && (
           <div className={cn(
-            "absolute -top-8 right-2 text-[10px] font-mono px-2 py-0.5 rounded-md border animate-in fade-in slide-in-from-bottom-1",
-            isOverLimit 
-              ? "bg-red-500/20 text-red-400 border-red-500/30" 
-              : isNearLimit
-                ? "bg-amber-500/20 text-amber-400 border-amber-500/30"
-                : "bg-white/5 text-white/40 border-white/10"
+            "absolute -top-8 right-2 text-[10px] font-mono px-2 py-0.5 rounded-md border backdrop-blur-md animate-in fade-in slide-in-from-bottom-1",
+            isOverLimit ? "bg-red-500/20 text-red-400 border-red-500/30" : isNearLimit ? "bg-amber-500/20 text-amber-400 border-amber-500/30" : "bg-black/40 text-white/40 border-white/10"
           )}>
             {content.length.toLocaleString()} / {CHAR_LIMIT.toLocaleString()}
           </div>
         )}
 
+        {/* THE FIX: Glassy input background */}
         <div className={cn(
-          "relative flex items-end gap-2 p-2 rounded-2xl bg-surface-900 border transition-all duration-200",
-          isOverLimit 
-            ? "border-red-500/50" 
-            : isNearLimit 
-              ? "border-amber-500/50 focus-within:border-amber-400" 
-              : "border-white/10 focus-within:border-primary-500/50 focus-within:ring-1 focus-within:ring-primary-500/20"
+          "relative flex items-end gap-2 p-2 rounded-2xl bg-black/40 backdrop-blur-md border border-white/10 transition-all duration-200 shadow-xl",
+          "ml-10 md:ml-[52px]",
+          isOverLimit ? "border-red-500/50" : isNearLimit ? "focus-within:border-amber-400" : "focus-within:border-primary-500/50 focus-within:ring-1 focus-within:ring-primary-500/20"
         )}>
           <textarea
             ref={textareaRef}
@@ -76,12 +62,9 @@ export const ChatInput = () => {
             value={content}
             onChange={(e) => setContent(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={isStreaming ? "Assistant is thinking..." : "Ask Kyuna anything..."}
+            placeholder={isStreaming ? "Kyuna is thinking..." : "Ask Kyuna anything..."}
             disabled={isStreaming}
-            className={cn(
-              "flex-1 bg-transparent border-none outline-none text-white text-sm py-2 px-3 resize-none custom-scrollbar",
-              "placeholder:text-white/20 disabled:cursor-not-allowed"
-            )}
+            className="flex-1 bg-transparent border-none outline-none text-white text-sm py-2 px-3 resize-none custom-scrollbar placeholder:text-white/40 disabled:cursor-not-allowed"
           />
 
           <button
@@ -90,21 +73,13 @@ export const ChatInput = () => {
             className={cn(
               "mb-1 p-2 rounded-xl transition-all flex items-center justify-center shrink-0",
               content.trim() && !isStreaming && !isOverLimit
-                ? "bg-primary-600 text-white shadow-lg shadow-primary-900/40 hover:bg-primary-500 active:scale-95"
-                : "bg-white/5 text-white/20 cursor-not-allowed"
+                ? "bg-primary-600 text-white shadow-lg hover:bg-primary-500 active:scale-95"
+                : "bg-white/5 text-white/30 cursor-not-allowed"
             )}
             aria-label="Send message"
           >
             <Send size={18} />
           </button>
-        </div>
-
-        {isOverLimit && (
-          <div className="mt-2 flex items-center gap-1.5 text-red-400 text-[11px] animate-in fade-in slide-in-from-top-1">
-            <AlertCircle size={12} />
-            <span>Prompt exceeds 4,000 character limit.</span>
-          </div>
-        )}
       </div>
     </div>
   );

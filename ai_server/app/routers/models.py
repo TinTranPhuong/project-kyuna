@@ -16,10 +16,13 @@ async def list_models():
     models = []
     
     for filename in model_files:
+        # Prevent the UI from seeing vision projectors as standalone models
+        if filename.lower().startswith("mmproj-"):
+            continue
+            
         file_path = Path(settings.MODELS_DIR) / filename
         file_size_gb = file_path.stat().st_size / (1024 ** 3) if file_path.exists() else None
         
-        # Guess type from filename (added qwen for your specific target)
         vision_keywords = ["llava", "vision", "moondream", "qwen"]
         model_type = "vision" if any(x in filename.lower() for x in vision_keywords) else "text"
         

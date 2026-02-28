@@ -64,7 +64,7 @@ export const useSettingsStore = create<SettingsState>()(
       setTheme: (theme) => set({ theme }),
 
       setFontSize: (size) => {
-        const clamped = Math.min(Math.max(size, 12), 18)
+        const clamped = Math.min(Math.max(size, 12))
         // Apply immediately so the entire UI re-scales without a page reload
         document.documentElement.style.fontSize = `${clamped}px`
         set({ fontSize: clamped })

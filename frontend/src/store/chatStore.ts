@@ -4,32 +4,27 @@ import type { Conversation, ConversationWithMessages } from '@/services/chat.ser
 import type { Message } from '@/types/chat.types'
 import { useSettingsStore } from './settingsStore'
 
-// Re-export so components can import from one place
 export type { Conversation, Message }
-
-// ─── State Interface ──────────────────────────────────────────────────────────
 
 interface ChatState {
   conversations: Conversation[]
   activeConversationId: string | null
-  messages: Record<string, Message[]>   // keyed by conversationId
+  messages: Record<string, Message[]>
   isStreaming: boolean
-  currentStreamContent: string           // live token accumulator during stream
+  currentStreamContent: string
   selectedModel: string
-  _abortController: AbortController | null  // cancel in-flight stream on new send
+  _abortController: AbortController | null
 
-  // Actions
   loadConversations: () => Promise<void>
   selectConversation: (id: string) => Promise<void>
   createConversation: () => Promise<Conversation | undefined>
   deleteConversation: (id: string) => Promise<void>
+  updateConversationTitle: (id: string, title: string) => Promise<void> // NEW: Added to interface
   sendMessage: (content: string) => Promise<void>
   setModel: (model: string) => void
   appendStreamToken: (token: string) => void
   finalizeStream: (fullContent: string) => void
 }
-
-// ─── Store ────────────────────────────────────────────────────────────────────
 
 export const useChatStore = create<ChatState>((set, get) => ({
   conversations: [],
@@ -37,13 +32,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   messages: {},
   isStreaming: false,
   currentStreamContent: '',
-  // Read the persisted model preference at store creation time.
-  // If settings haven't loaded yet, this falls back to a sensible default.
-  // Components that change the model call setModel() which updates this live.
   selectedModel: useSettingsStore.getState().chatModel ?? 'llama-3.1-8b-instruct-q4_k_m.gguf',
   _abortController: null,
-
-  // ─── Conversations ──────────────────────────────────────────────────────────
 
   loadConversations: async () => {
     try {
@@ -57,7 +47,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   selectConversation: async (id) => {
     set({ activeConversationId: id, currentStreamContent: '' })
 
-    // Messages are cached in memory — only fetch from server if not already loaded
     if (!get().messages[id]) {
       try {
         const data: ConversationWithMessages = await chatService.getConversation(id)
@@ -102,13 +91,27 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  // ─── Messaging ──────────────────────────────────────────────────────────────
+  // NEW: Store implementation
+  updateConversationTitle: async (id, title) => {
+    // Optimistic UI update
+    set(state => ({
+      conversations: state.conversations.map(conv => 
+        conv.id === id ? { ...conv, title } : conv
+      )
+    }))
+
+    try {
+      await chatService.updateConversationTitle(id, title)
+    } catch (error) {
+      console.error('Failed to update conversation title:', error)
+      // If needed, you can reload conversations here to revert the UI on failure
+    }
+  },
 
   sendMessage: async (content) => {
     const { activeConversationId, selectedModel, isStreaming, _abortController } = get()
     if (!activeConversationId) return
 
-    // Guard: if a stream is already in flight, abort it before starting a new one
     if (isStreaming && _abortController) {
       _abortController.abort()
     }
@@ -116,8 +119,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const controller = new AbortController()
     set({ _abortController: controller })
 
-    // Optimistic update — add user message immediately so the UI feels instant.
-    // All required Message fields are filled; nulls match the backend schema.
     const userMessage: Message = {
       id: `optimistic-${Date.now()}`,
       conversation_id: activeConversationId,
@@ -127,6 +128,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       generation_ms: null,
       model_used: null,
       created_at: new Date().toISOString(),
+      timestamp: new Date().toISOString(), 
     }
 
     set(state => ({
@@ -142,7 +144,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }))
 
     try {
-      const stream = chatService.sendMessageStream(
+      const stream = await chatService.sendMessageStream(
         activeConversationId,
         content,
         selectedModel,
@@ -150,14 +152,27 @@ export const useChatStore = create<ChatState>((set, get) => ({
       )
 
       let fullContent = ''
+      let textBuffer = ''
+      let lastUpdateTime = Date.now()
+      const THROTTLE_MS = 50
+
       for await (const token of stream) {
         fullContent += token
-        get().appendStreamToken(token)
+        textBuffer += token
+
+        if (Date.now() - lastUpdateTime > THROTTLE_MS) {
+          get().appendStreamToken(textBuffer)
+          textBuffer = ''
+          lastUpdateTime = Date.now()
+        }
+      }
+
+      if (textBuffer.length > 0) {
+        get().appendStreamToken(textBuffer)
       }
 
       get().finalizeStream(fullContent)
     } catch (error) {
-      // AbortError is intentional (user sent a new message) — don't log it as an error
       if (error instanceof Error && error.name === 'AbortError') return
       console.error('Streaming error:', error)
       set({ isStreaming: false, currentStreamContent: '' })
@@ -166,15 +181,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setModel: (model) => set({ selectedModel: model }),
 
-  appendStreamToken: (token) => {
-    set(state => ({ currentStreamContent: state.currentStreamContent + token }))
+  appendStreamToken: (tokenChunk) => {
+    set(state => ({ currentStreamContent: state.currentStreamContent + tokenChunk }))
   },
 
-  /**
-   * Called when the SSE stream ends.
-   * Replaces the live stream content with a proper Message record so
-   * the full response is preserved after currentStreamContent is cleared.
-   */
   finalizeStream: (fullContent) => {
     const { activeConversationId, selectedModel } = get()
     if (!activeConversationId) return
@@ -188,6 +198,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       generation_ms: null,
       model_used: selectedModel,
       created_at: new Date().toISOString(),
+      timestamp: new Date().toISOString(), 
     }
 
     set(state => ({
