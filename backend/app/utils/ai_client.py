@@ -1,9 +1,14 @@
 import json
 from typing import AsyncGenerator
-
 import httpx
 
 from app.core.config import settings
+
+class AIServerError(Exception):
+    def __init__(self, status_code: int, message: str):
+        self.status_code = status_code
+        self.message = message
+        super().__init__(message)
 
 
 class AIServerClient:
@@ -61,6 +66,38 @@ class AIServerClient:
                     except json.JSONDecodeError:
                         continue
 
+    async def translate_image_vision_stream(
+        self, 
+        image_base64: str, 
+        source_language: str, 
+        target_language: str
+    ) -> AsyncGenerator[str | dict, None]:
+        
+        payload = {
+            "image": image_base64,
+            "source_language": source_language,
+            "target_language": target_language
+        }
+        
+        # Set timeout to None to completely disable connection dropping
+        timeout_config = httpx.Timeout(None) 
+        ai_url = "http://127.0.0.1:8001/v1/translate/image/stream"
+
+        async with httpx.AsyncClient(timeout=timeout_config) as client:
+            try:
+                async with client.stream("POST", ai_url, json=payload) as response:
+                    response.raise_for_status()
+                    
+                    # Use aiter_lines() to prevent SSE chunk fragmentation!
+                    async for line in response.aiter_lines():
+                        if line.startswith("data: "):
+                            data_str = line[6:].strip()
+                            if data_str:
+                                yield data_str
+                                
+            except Exception as e:
+                yield {"error": f"AI Client connection error: {str(e)}", "done": True}
+
     async def translate_image(
         self,
         image_base64: str,
@@ -90,6 +127,45 @@ class AIServerClient:
         except Exception:
             return False
 
+    async def ocr_pipeline(self, image_base64: str) -> list[dict]:
+        """
+        POST /v1/translate/ocr-pipeline
+        Executes Stages 1, 2, and 3 on the AI server in one shot.
+        Returns: [{"bbox": [x1,y1,x2,y2], "japanese": "text"}, ...]
+        Raises AIServerError on failure.
+        """
+        try:
+            response = await self.client.post(
+                "/v1/translate/ocr-pipeline",
+                json={"image": image_base64},
+                timeout=120.0,
+            )
+            response.raise_for_status()
+            return response.json()["regions"]
+        except httpx.ConnectError as e:
+            raise AIServerError(503, f"AI server unreachable: {e}") from e
+        except httpx.HTTPStatusError as e:
+            raise AIServerError(e.response.status_code, str(e)) from e
+
+
+    async def translate_batch(self, regions: list[dict]) -> list[dict]:
+        """
+        POST /v1/translate/batch
+        Triggers Hangoff Protocol on AI server side and translates.
+        Returns regions with "english" field populated.
+        """
+        try:
+            response = await self.client.post(
+                "/v1/translate/batch",
+                json={"regions": regions},
+                timeout=600.0,   # 35B model may need time for first load + inference
+            )
+            response.raise_for_status()
+            return response.json()["regions"]
+        except httpx.ConnectError as e:
+            raise AIServerError(503, f"AI server unreachable: {e}") from e
+        except httpx.HTTPStatusError as e:
+            raise AIServerError(e.response.status_code, str(e)) from e
 
 # Singleton instance — import this in services
 ai_client = AIServerClient()

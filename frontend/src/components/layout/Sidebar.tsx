@@ -16,7 +16,7 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { icon: Home,         label: 'Focus',     path: '/'          },
+  { icon: Home,         label: 'Home Page',     path: '/'          },
   { icon: MessageSquare,label: 'Chat',      path: '/chat'      },
   { icon: Languages,    label: 'Translate', path: '/translate' },
   { icon: BarChart2,    label: 'Dashboard', path: '/dashboard' },
@@ -24,14 +24,13 @@ const NAV_ITEMS: NavItem[] = [
 
 export const Sidebar = () => {
   const [isHovered, setIsHovered] = useState(false);
-  
   const setManagerOpen = useNoteStore(state => state.setManagerOpen);
-  const isExpanded = isHovered; // Now relies purely on hover
+  const isExpanded = isHovered; 
 
   return (
     <motion.aside
       initial={false}
-      animate={{ width: isExpanded ? 300 : 120 }}
+      animate={{ width: isExpanded ? 260 : 80 }}
       transition={{ duration: 0.2, ease: 'easeInOut' }}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
@@ -43,13 +42,13 @@ export const Sidebar = () => {
       )}
     >
       <div className="flex flex-col h-full overflow-hidden">
-        {/* Main Navigation (Single unified list) */}
+        {/* Main Navigation */}
         <nav className="flex-1 flex flex-col gap-2 overflow-y-auto overflow-x-hidden px-2 custom-scrollbar">
           {NAV_ITEMS.map(item => (
             <SidebarLink key={item.path} item={item} isExpanded={isExpanded} />
           ))}
 
-          {/* Notes Manager Button */}
+          {/* Notes Button (Moved up directly under the map loop) */}
           <Tooltip content="Notes" position="right" className={isExpanded ? 'hidden' : ''}>
             <button
               onClick={() => setManagerOpen(true)}
@@ -61,16 +60,13 @@ export const Sidebar = () => {
             >
               <StickyNote size={18} className="shrink-0" />
               {isExpanded && (
-                <motion.span 
-                  initial={{ opacity: 0, x: -10 }} 
-                  animate={{ opacity: 1, x: 0 }} 
-                  className="ml-3 font-medium text-sm whitespace-nowrap overflow-hidden text-ellipsis flex-1 text-left"
-                >
+                <motion.span initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} className="ml-3 font-medium text-sm whitespace-nowrap overflow-hidden text-ellipsis flex-1 text-left">
                   Notes
                 </motion.span>
               )}
             </button>
           </Tooltip>
+
         </nav>
       </div>
     </motion.aside>

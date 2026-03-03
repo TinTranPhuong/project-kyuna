@@ -29,7 +29,7 @@ export default function MainLayout() {
         </div>
         
         {/* Scrollable Page Content (z-10) */}
-        <main className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden z-10 relative">
+        <main className="flex-1 relative flex flex-col min-w-0 overflow-hidden pb-24">
           
           <AnimatePresence mode="wait">
             <motion.div
@@ -40,7 +40,8 @@ export default function MainLayout() {
               transition={{ duration: 0.3, ease: 'easeOut' }}
               className="h-full w-full flex flex-col" 
             >
-              <Outlet />                         
+              <Outlet />  
+
             </motion.div>
           </AnimatePresence>
           

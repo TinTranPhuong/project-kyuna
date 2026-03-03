@@ -1,10 +1,11 @@
 import json
 from typing import List, Dict, Optional, Any
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.services.model_manager import model_manager
+from app.core.config import settings
 
 router = APIRouter()
 
@@ -17,15 +18,29 @@ class ChatCompletionRequest(BaseModel):
     top_p: float = 0.95
     stop: Optional[List[str]] = None
 
+async def ensure_text_model_loaded(requested_model: str):
+    """Helper to lazy-load the text model if it isn't running or if a swap is needed."""
+    model_to_load = requested_model if requested_model else settings.DEFAULT_MODEL
+    
+    if not model_to_load:
+        raise HTTPException(
+            status_code=503, 
+            detail="No text model specified in request and no DEFAULT_MODEL configured in .env"
+        )
+        
+    if model_manager.current_model_name != model_to_load:
+        print(f"Lazy-loading text model: {model_to_load}...")
+        await model_manager.load_model(model_to_load)
+
+
 @router.post("/chat/completions")
 async def chat_completions(request: ChatCompletionRequest):
     """
     OpenAI-compatible chat completion endpoint.
     Automatically handles VRAM model swapping via the Hangoff Protocol.
     """
-    # Load requested model if different from the one currently in VRAM
-    if request.model != model_manager.current_model_name:
-        await model_manager.load_model(request.model)
+    # 1. Lazy load text model if needed
+    await ensure_text_model_loaded(request.model)
 
     if request.stream:
         async def event_generator():

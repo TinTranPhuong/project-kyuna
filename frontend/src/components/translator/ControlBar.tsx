@@ -1,24 +1,39 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslatorStore } from '@/store/translatorStore';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Eye, EyeOff } from 'lucide-react';
+import type { OverlayMode } from '@/types/translator.types';
 
 export const ControlBar = () => {
-  const { currentPage, totalPages, nextPage, prevPage, goToPage, activeJobId } = useTranslatorStore();
+  const { 
+    currentPage, 
+    totalPages, 
+    nextPage, 
+    prevPage, 
+    goToPage, 
+    activeJobId,
+    // New Store Selectors
+    overlayMode,
+    setOverlayMode,
+    pageRegions,
+    // Legacy toggle for the original image is replaced by 'Original' mode, 
+    // but we keep showOverlay/toggleShowOverlay if you still want a global "Hide" 
+    // functionality independent of mode, or we can consider "Original" mode as hiding the overlay.
+    // For this ticket, we strictly follow the requirement to replace the dots toggle.
+  } = useTranslatorStore();
+  
   const [isEditing, setIsEditing] = useState(false);
   const [inputValue, setInputValue] = useState(currentPage.toString());
 
-  // Keep local input state in sync if the page changes via thumbnails or keyboard
+  // Keep local input state in sync
   useEffect(() => {
     setInputValue(currentPage.toString());
   }, [currentPage]);
 
   const handleJumpSubmit = () => {
     const page = parseInt(inputValue, 10);
-    // Validate jump input
     if (!isNaN(page) && page >= 1 && page <= totalPages) {
       goToPage(page);
     } else {
-      // Revert if invalid input
       setInputValue(currentPage.toString());
     }
     setIsEditing(false);
@@ -34,8 +49,21 @@ export const ControlBar = () => {
 
   if (!activeJobId) return null;
 
+  // Check if current page has regions (completed)
+  const regions = pageRegions[currentPage] || [];
+  const hasRegions = regions.length > 0;
+
+  // Mode configuration
+  const MODES: { value: OverlayMode; label: string }[] = [
+    { value: 'dots',     label: 'Dots'     },
+    { value: 'text',     label: 'Text'     },
+    { value: 'original', label: 'Original' },
+  ];
+
   return (
-    <div className="flex items-center justify-center gap-4 bg-surface-900 border border-white/5 p-2 rounded-xl shadow-lg w-fit mx-auto mt-4">
+    <div className="flex items-center justify-center gap-2 sm:gap-4 bg-surface-900 border border-white/5 p-2 rounded-xl shadow-lg w-fit mx-auto mt-4">
+      
+      {/* Pagination Controls */}
       <button
         onClick={prevPage}
         disabled={currentPage <= 1}
@@ -44,7 +72,7 @@ export const ControlBar = () => {
         <ChevronLeft size={20} />
       </button>
 
-      <div className="w-32 flex justify-center">
+      <div className="w-28 sm:w-32 flex justify-center">
         {isEditing ? (
           <input
             type="number"
@@ -56,7 +84,7 @@ export const ControlBar = () => {
             onBlur={handleJumpSubmit}
             onKeyDown={handleKeyDown}
             className="w-16 bg-surface-950 border border-primary-500/50 rounded px-1 py-0.5 text-center text-sm font-medium text-white outline-none"
-            style={{ appearance: 'textfield' }} // Hides native number arrows
+            style={{ appearance: 'textfield' }} 
           />
         ) : (
           <button 
@@ -76,6 +104,31 @@ export const ControlBar = () => {
       >
         <ChevronRight size={20} />
       </button>
+
+      {/* NEW: 3-Way Segmented Control (Only visible when page has regions) */}
+      {hasRegions && (
+        <>
+          <div className="w-px h-6 bg-white/10 mx-1"></div>
+          
+          <div className="flex bg-surface-950/50 rounded-lg p-1 border border-white/10">
+            {MODES.map(({ value, label }) => (
+              <button
+                key={value}
+                onClick={() => setOverlayMode(value)}
+                className={`
+                  px-3 py-1 text-xs font-medium rounded-md transition-all duration-200
+                  ${overlayMode === value 
+                    ? 'bg-primary-500/20 text-primary-300 shadow-sm ring-1 ring-primary-500/50' 
+                    : 'text-white/40 hover:text-white/80 hover:bg-white/5'}
+                `}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+
     </div>
   );
 };

@@ -7,11 +7,8 @@ from app.routers import chat, models, translate
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # On startup: load the default model
-    model_name = settings.DEFAULT_MODEL
-    if model_name:
-        print(f"Startup: Loading default model '{model_name}'...")
-        await model_manager.load_model(model_name)
+    # Server boots instantly without locking up VRAM
+    print("Server started. Models will be lazy-loaded on first request.")
     
     yield
     

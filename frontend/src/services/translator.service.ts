@@ -51,6 +51,10 @@ export const translatorService = {
       '/api/v1/translate/upload',
       formData,
       {
+        // THE FIX: Override the custom Axios instance defaults
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
         onUploadProgress: progressEvent => {
           if (onProgress && progressEvent.total) {
             const pct = Math.round((progressEvent.loaded * 100) / progressEvent.total)
@@ -97,28 +101,26 @@ export const translatorService = {
 
   /** DELETE /api/v1/translate/jobs/:id */
   deleteJob: async (id: string): Promise<void> => {
-    await axiosInstance.delete(`/api/v1/translate/jobs/${id}`)
+    // Await the deletion but do NOT try to return or parse response.data
+    // since a 204 No Content response has no body.
+    await axiosInstance.delete(`/api/v1/translate/jobs/${id}`);
   },
 
   /**
-   * Returns the absolute URL for a single translated or original page image.
-   *
-   * The backend exposes two separate routes (not a single route with a ?type= param):
-   *   GET /api/v1/translate/jobs/{id}/pages/{num}/original
-   *   GET /api/v1/translate/jobs/{id}/pages/{num}/translated
-   *
-   * These return a FileResponse — use as <img src={url} /> directly.
-   * The browser will attach the Authorization header automatically because the
-   * request goes through the Nginx proxy (not a cross-origin fetch).
-   * If your deployment requires explicit auth headers on image requests,
-   * replace <img src> with a custom hook that fetches → creates an objectURL.
+   * GET /api/v1/translate/jobs/:id/pages/:num/:type
+   * CRITICAL: Fetches the image as a Blob so our Axios interceptors can inject the 
+   * Authorization: Bearer token header. Returns the raw blob data.
    */
-  getPageUrl: (
+  getPageBlob: async (
     jobId: string,
     page: number,
     type: 'original' | 'translated',
-  ): string => {
-    const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-    return `${baseUrl}/api/v1/translate/jobs/${jobId}/pages/${page}/${type}`
+  ): Promise<Blob> => {
+    // Note: The /api/v1 prefix is correctly included here
+    const response = await axiosInstance.get(
+      `/api/v1/translate/jobs/${jobId}/pages/${page}/${type}`,
+      { responseType: 'blob' } // Must tell Axios to expect a file blob, not JSON
+    )
+    return response.data
   },
 }

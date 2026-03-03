@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { translatorService } from '@/services/translator.service'
-import type { TranslationJob, TranslationJobDetail } from '@/services/translator.service'
+import type { TranslationJobDetail } from '@/services/translator.service'
+import type { TranslationJob, TranslationRegion, PipelineRegion, OverlayMode } from '@/types/translator.types'
 
 export type { TranslationJob }
 
@@ -8,19 +9,26 @@ export type { TranslationJob }
 
 interface TranslatorState {
   jobs: TranslationJob[]
-  activeJobId: string | null   // matches spec field name
+  activeJobId: string | null
   currentPage: number
   totalPages: number
   isUploading: boolean
-  uploadProgress: number        // 0–100
+  uploadProgress: number        // 0-100
   sourceLanguage: string
   targetLanguage: string
   showOriginal: boolean
+  showOverlay: boolean          // Controls visibility of the overlay container
+  
+  // NEW: 3-way overlay mode (dots | text | original)
+  overlayMode: OverlayMode
+  
+  // Caches regions by page_number
+  pageRegions: Record<number, (TranslationRegion | PipelineRegion)[]>
 
   // Actions
   loadJobs: () => Promise<void>
   uploadFile: (file: File, onProgress?: (pct: number) => void) => Promise<void>
-  selectJob: (id: string) => void
+  selectJob: (id: string) => Promise<void>
   pollJobStatus: (id: string) => Promise<void>
   nextPage: () => void
   prevPage: () => void
@@ -28,18 +36,17 @@ interface TranslatorState {
   retranslate: (id: string) => Promise<void>
   downloadZip: (id: string) => Promise<void>
   deleteJob: (id: string) => Promise<void>
+  
   toggleShowOriginal: () => void
+  toggleShowOverlay: () => void
+  setOverlayMode: (mode: OverlayMode) => void  // <--- NEW
+  
   setSourceLanguage: (lang: string) => void
   setTargetLanguage: (lang: string) => void
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/**
- * Derive totalPages from the job object.
- * A completed job has a `pages` array (TranslationJobDetail); a fresh upload
- * or list-view job uses `page_count`. Always fall back to 1.
- */
 function getTotalPages(job: TranslationJob | TranslationJobDetail): number {
   if ('pages' in job && Array.isArray(job.pages) && job.pages.length > 0) {
     return job.pages.length
@@ -47,19 +54,14 @@ function getTotalPages(job: TranslationJob | TranslationJobDetail): number {
   return job.page_count || 1
 }
 
-/**
- * Trigger a browser file download from a Blob without opening a new tab.
- * Creates a temporary object URL, clicks it programmatically, then revokes.
- */
 function triggerBlobDownload(blob: Blob, filename: string): void {
   const url  = URL.createObjectURL(blob)
   const link = document.createElement('a')
-  link.href     = url
+  link.href = url
   link.download = filename
   document.body.appendChild(link)
   link.click()
   document.body.removeChild(link)
-  // Revoke after a short delay to let the browser start the download
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
@@ -75,6 +77,12 @@ export const useTranslatorStore = create<TranslatorState>((set, get) => ({
   sourceLanguage: 'auto',
   targetLanguage: 'en',
   showOriginal: false,
+  showOverlay: true,
+  
+  // NEW: Default to 'dots' mode
+  overlayMode: 'dots',
+  
+  pageRegions: {},
 
   // ─── Load ──────────────────────────────────────────────────────────────────
 
@@ -90,7 +98,9 @@ export const useTranslatorStore = create<TranslatorState>((set, get) => ({
   // ─── Upload ────────────────────────────────────────────────────────────────
 
   uploadFile: async (file, onProgress) => {
-    set({ isUploading: true, uploadProgress: 0 })
+    // Reset pageRegions and overlayMode for the new job
+    set({ isUploading: true, uploadProgress: 0, pageRegions: {}, overlayMode: 'dots' })
+    
     const { sourceLanguage, targetLanguage } = get()
 
     try {
@@ -110,6 +120,8 @@ export const useTranslatorStore = create<TranslatorState>((set, get) => ({
         totalPages: getTotalPages(newJob),
         currentPage: 1,
         isUploading: false,
+        pageRegions: {},
+        overlayMode: 'dots' // Ensure consistent state
       }))
     } catch (error) {
       set({ isUploading: false })
@@ -119,29 +131,48 @@ export const useTranslatorStore = create<TranslatorState>((set, get) => ({
 
   // ─── Selection ─────────────────────────────────────────────────────────────
 
-  selectJob: (id) => {
+  selectJob: async (id) => {
     const job = get().jobs.find(j => j.id === id)
     set({
       activeJobId: id,
       currentPage: 1,
       totalPages: job ? getTotalPages(job) : 1,
       showOriginal: false,
+      pageRegions: {}, 
     })
+
+    try {
+      const jobDetail = await translatorService.getJob(id)
+      const pageRegions: Record<number, (TranslationRegion | PipelineRegion)[]> = {}
+      
+      for (const page of jobDetail.pages ?? []) {
+        if (page.regions && page.regions.length > 0) {
+          pageRegions[page.page_number] = page.regions
+        }
+      }
+      
+      set({ pageRegions })
+    } catch (error) {
+      console.error('Failed to fetch job details for region caching:', error)
+    }
   },
 
   // ─── Polling ───────────────────────────────────────────────────────────────
 
-  /**
-   * Called every 2 seconds by TranslatorPage while job.status === 'processing'.
-   * Uses getJob (returns TranslationJobDetail with pages array) so totalPages
-   * updates progressively as pages are completed.
-   */
   pollJobStatus: async (id) => {
     try {
       const updatedJob: TranslationJobDetail = await translatorService.getJob(id)
+      
+      const newPageRegions = { ...get().pageRegions }
+      for (const page of updatedJob.pages ?? []) {
+        if (page.regions && page.regions.length > 0) {
+          newPageRegions[page.page_number] = page.regions
+        }
+      }
 
       set(state => ({
         jobs: state.jobs.map(j => j.id === id ? updatedJob : j),
+        pageRegions: newPageRegions,
         ...(state.activeJobId === id && {
           totalPages: getTotalPages(updatedJob),
         }),
@@ -170,28 +201,19 @@ export const useTranslatorStore = create<TranslatorState>((set, get) => ({
 
   // ─── Actions ───────────────────────────────────────────────────────────────
 
-  /**
-   * POST /api/v1/translate/jobs/:id/retranslate
-   * The backend re-runs translation using the job's stored settings —
-   * no need to re-send sourceLanguage/targetLanguage, the backend has them.
-   */
   retranslate: async (id) => {
     try {
       const updatedJob = await translatorService.retranslate(id)
       set(state => ({
         jobs: state.jobs.map(j => j.id === id ? updatedJob : j),
+        pageRegions: state.activeJobId === id ? {} : state.pageRegions
       }))
-      // Start polling so the UI reflects progress
       void get().pollJobStatus(id)
     } catch (error) {
       console.error('Retranslate request failed:', error)
     }
   },
 
-  /**
-   * Downloads all translated pages as a ZIP file and triggers a browser download.
-   * The service returns a Blob; this store handles the DOM-level download trigger.
-   */
   downloadZip: async (id) => {
     const job = get().jobs.find(j => j.id === id)
     const filename = job ? `${job.original_filename.replace(/\.[^/.]+$/, '')}_translated.zip` : 'translated.zip'
@@ -206,10 +228,15 @@ export const useTranslatorStore = create<TranslatorState>((set, get) => ({
   deleteJob: async (id) => {
     try {
       await translatorService.deleteJob(id)
-      set(state => ({
-        jobs: state.jobs.filter(j => j.id !== id),
-        activeJobId: state.activeJobId === id ? null : state.activeJobId,
-      }))
+      
+      set(state => {
+        const isActiveJob = state.activeJobId === id;
+        return {
+          jobs: state.jobs.filter(j => j.id !== id),
+          activeJobId: isActiveJob ? null : state.activeJobId,
+          pageRegions: isActiveJob ? {} : state.pageRegions,
+        }
+      })
     } catch (error) {
       console.error('Delete failed:', error)
     }
@@ -218,6 +245,11 @@ export const useTranslatorStore = create<TranslatorState>((set, get) => ({
   // ─── Toggles ───────────────────────────────────────────────────────────────
 
   toggleShowOriginal: () => set(state => ({ showOriginal: !state.showOriginal })),
+  toggleShowOverlay: () => set(state => ({ showOverlay: !state.showOverlay })),
+  
+  // NEW: Set exact overlay mode
+  setOverlayMode: (mode) => set({ overlayMode: mode }),
+  
   setSourceLanguage: (sourceLanguage) => set({ sourceLanguage }),
   setTargetLanguage: (targetLanguage) => set({ targetLanguage }),
 }))

@@ -14,23 +14,11 @@ export default function TranslatorPage() {
   const loadJobs      = useTranslatorStore(state => state.loadJobs)
   const pollJobStatus = useTranslatorStore(state => state.pollJobStatus)
   const jobs          = useTranslatorStore(state => state.jobs)
-  // const selectJob     = useTranslatorStore(state => state.selectJob)
 
-  // BUG 1 FIXED: state.activeJob does not exist in translatorStore.
-  // The store has activeJobId: string | null. Accessing state.activeJob returns
-  // undefined — activeJob?.status is always undefined, so the conditional rendering
-  // always falls through to the idle "Upload a file" state even when a job is active.
-  // Fix: read activeJobId from the store and derive the job object from the jobs array.
   const activeJobId = useTranslatorStore(state => state.activeJobId)
   const activeJob: TranslationJob | null =
     activeJobId ? (jobs.find(j => j.id === activeJobId) ?? null) : null
 
-  // BUG 2 FIXED: state.sourceLang → state.sourceLanguage
-  // BUG 3 FIXED: state.targetLang → state.targetLanguage
-  // BUG 4 FIXED: state.setSourceLang → state.setSourceLanguage
-  // BUG 5 FIXED: state.setTargetLang → state.setTargetLanguage
-  // All four field names were wrong — every language selector read undefined
-  // and setters were undefined functions → runtime TypeError on user interaction.
   const sourceLanguage    = useTranslatorStore(state => state.sourceLanguage)
   const setSourceLanguage = useTranslatorStore(state => state.setSourceLanguage)
   const targetLanguage    = useTranslatorStore(state => state.targetLanguage)
@@ -40,9 +28,6 @@ export default function TranslatorPage() {
   useEffect(() => { loadJobs() }, [loadJobs])
 
   // Poll every 2s while a job is actively translating.
-  // Dependency on [activeJobId, activeJob?.status] means the effect re-runs when
-  // status changes to 'completed'/'failed' — React's cleanup clears the old interval
-  // before the new effect starts with no setInterval, stopping the polling automatically.
   useEffect(() => {
     if (!activeJobId || activeJob?.status !== 'processing') return
     const intervalId = setInterval(() => pollJobStatus(activeJobId), 2000)
@@ -62,15 +47,19 @@ export default function TranslatorPage() {
 
         ) : activeJob ? (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex-1 flex flex-col h-full">
-            <div className="p-4 shrink-0 bg-white/5 border-b border-white/10">
-              <ActionBar />
-            </div>
+            
+            {/* THE FIX: Top Bar has been completely removed! */}
+            
             <div className="flex-1 overflow-hidden bg-black/20 p-4">
               <PageViewer />
             </div>
-            <div className="p-4 shrink-0 bg-white/5 border-t border-white/10">
+            
+            {/* THE FIX: Moved ActionBar (Re-translate) down next to ControlBar */}
+            <div className="p-4 shrink-0 bg-white/5 border-t border-white/10 flex items-center justify-between">
               <ControlBar />
+              <ActionBar />
             </div>
+            
           </motion.div>
 
         ) : (
@@ -88,7 +77,6 @@ export default function TranslatorPage() {
           <h3 className="text-sm font-semibold text-white/70 uppercase tracking-wider">Translation Settings</h3>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1">
-              {/* BUG 2+4: htmlFor/id and value/onChange corrected */}
               <label className="text-xs text-white/50" htmlFor="sourceLanguage">Source</label>
               <select
                 id="sourceLanguage"
@@ -104,7 +92,6 @@ export default function TranslatorPage() {
               </select>
             </div>
             <div className="space-y-1">
-              {/* BUG 3+5: htmlFor/id and value/onChange corrected */}
               <label className="text-xs text-white/50" htmlFor="targetLanguage">Target</label>
               <select
                 id="targetLanguage"
@@ -120,8 +107,7 @@ export default function TranslatorPage() {
           </div>
         </div>
 
-        {/* Past Jobs list — allows switching between previous translation jobs.
-            Was missing from the original: users had no way to re-open finished jobs. */}
+        {/* Past Jobs list */}
         {jobs.length > 0 && (
           <div className="border-b border-white/10 max-h-48 overflow-y-auto p-4 shrink-0">
             <h4 className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-2">Past Jobs</h4>

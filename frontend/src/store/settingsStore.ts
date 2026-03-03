@@ -5,24 +5,37 @@ import { persist, createJSONStorage } from 'zustand/middleware'
 
 export type ThemeType = 'night-garden' | 'rainy-city' | 'space' | 'forest'
 
+export interface MusicLink {
+  id: string;
+  title: string;
+  url: string;
+}
+
+export interface MusicGroup {
+  id: string;
+  name: string;
+  links: MusicLink[];
+}
+
 // ─── State Interface ──────────────────────────────────────────────────────────
 
 interface SettingsState {
   // Appearance
   theme: ThemeType
-  fontSize: number          // clamped 12–18px
+  fontSize: number
 
   // Music
   musicUrl: string
+  musicGroups: MusicGroup[] // <--- NEW: Stores all your playlists
 
   // Pomodoro Config
-  pomodoroWork: number      // minutes
+  pomodoroWork: number
   pomodoroShortBreak: number
   pomodoroLongBreak: number
   autoStartBreaks: boolean
   notificationSound: boolean
 
-  // AI Models — null until the user selects one from the ModelSelector
+  // AI Models
   chatModel: string | null
   visionModel: string | null
 
@@ -30,6 +43,7 @@ interface SettingsState {
   setTheme: (theme: ThemeType) => void
   setFontSize: (size: number) => void
   setMusicUrl: (url: string) => void
+  setMusicGroups: (groups: MusicGroup[]) => void // <--- NEW: Action to update groups
   setPomodoroWork: (min: number) => void
   setPomodoroShortBreak: (min: number) => void
   setPomodoroLongBreak: (min: number) => void
@@ -46,7 +60,20 @@ export const useSettingsStore = create<SettingsState>()(
       // ── Initial State ──────────────────────────────────────────────────────
       theme: 'night-garden',
       fontSize: 16,
-      musicUrl: 'https://www.youtube.com/watch?v=jfKfPfyJRdk', // Lo-fi hip hop default
+      musicUrl: 'https://www.youtube.com/watch?v=jfKfPfyJRdk', 
+
+      // Initialize with default presets so you don't lose them!
+      musicGroups: [
+        {
+          id: 'default-preset',
+          name: 'Curated Presets',
+          links: [
+            { id: 'p1', title: 'Lo-fi Hip Hop', url: 'https://youtube.com/watch?v=jfKfPfyJRdk' },
+            { id: 'p2', title: 'Chillhop', url: 'https://youtube.com/watch?v=5yx6BWlEVcU' },
+            { id: 'p3', title: 'Smooth Jazz', url: 'https://youtube.com/watch?v=neV3EPgvZ3g' }
+          ]
+        }
+      ],
 
       pomodoroWork: 25,
       pomodoroShortBreak: 5,
@@ -54,42 +81,31 @@ export const useSettingsStore = create<SettingsState>()(
       autoStartBreaks: false,
       notificationSound: true,
 
-      // Null defaults — populated once the user's available models are fetched
-      // from GET /api/v1/chat/models and the user picks one in SettingsPage.
       chatModel: null,
       visionModel: null,
 
       // ── Actions ────────────────────────────────────────────────────────────
-
       setTheme: (theme) => set({ theme }),
 
       setFontSize: (size) => {
         const clamped = Math.min(Math.max(size, 12))
-        // Apply immediately so the entire UI re-scales without a page reload
         document.documentElement.style.fontSize = `${clamped}px`
         set({ fontSize: clamped })
       },
 
       setMusicUrl: (musicUrl) => set({ musicUrl }),
+      setMusicGroups: (musicGroups) => set({ musicGroups }),
 
       setPomodoroWork: (pomodoroWork) => set({ pomodoroWork }),
       setPomodoroShortBreak: (pomodoroShortBreak) => set({ pomodoroShortBreak }),
       setPomodoroLongBreak: (pomodoroLongBreak) => set({ pomodoroLongBreak }),
-
-      // Generic toggle for any boolean setting — avoids one action per flag
       setToggle: (key, value) => set({ [key]: value }),
-
       setChatModel: (chatModel) => set({ chatModel }),
       setVisionModel: (visionModel) => set({ visionModel }),
     }),
     {
       name: 'kyuna-settings-storage',
       storage: createJSONStorage(() => localStorage),
-      /**
-       * Re-apply the persisted font size as soon as Zustand hydrates from
-       * localStorage. Without this, the font reverts to the browser default
-       * on every hard reload until the first React render finishes.
-       */
       onRehydrateStorage: () => (state) => {
         if (state) {
           document.documentElement.style.fontSize = `${state.fontSize}px`
