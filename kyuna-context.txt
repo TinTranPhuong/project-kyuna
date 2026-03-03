@@ -518,190 +518,6 @@ class OcrPipelineService:
 ocr_pipeline_service = OcrPipelineService()
 </file>
 
-<file path="ai_server/app/services/translation_pipeline_service.py">
-import gc
-import re
-import json
-import asyncio
-import platform
-import logging
-import torch # type: ignore
-
-from app.services.ocr_pipeline_service import ocr_pipeline_service
-from app.services.model_manager import model_manager
-from app.core.config import settings
-
-logger = logging.getLogger(__name__)
-
-def _windows_force_vram_release() -> None:
-    """
-    Force the Windows OS to reclaim GPU memory pages after PyTorch del + empty_cache().
-    No-op on Linux/macOS.
-    Copy the implementation from model_manager.py where it already exists.
-    """
-    if platform.system() != "Windows":
-        return
-    
-    try:
-        import ctypes
-        # -1, -1 forces the OS to aggressively swap out unused memory pages
-        ctypes.windll.kernel32.SetProcessWorkingSetSize(-1, -1, -1)
-        logger.info("Windows OS-level VRAM release triggered.")
-    except Exception as e:
-        logger.warning(f"Failed to force Windows VRAM release: {e}")
-        pass   # best-effort — do not crash the pipeline if ctypes fails
-
-
-async def hangoff_protocol() -> None:
-    """
-    Stage 4: Unload PyTorch models, force OS-level VRAM reclaim (Windows),
-    then load Qwen 35B / OpenAI 20B via llama.cpp.
-    Call only after all OCR pipeline work is complete.
-    """
-    logger.info("Executing Hangoff Protocol...")
-    
-    # Unload both detector + OCR models in one call
-    ocr_pipeline_service.unload()
-    
-    # Standard PyTorch cache flush
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
-        
-    gc.collect()
-    
-    # ── Windows VRAM Ghost Memory Fix ────────────────────────────────────────
-    # On Windows, PyTorch's empty_cache() marks the memory as free internally
-    # but does NOT yield it back to the OS. llama.cpp then fails to get a
-    # contiguous 22GB block for the LLM and throws CUDA OOM.
-    # _windows_force_vram_release() calls Win32 SetProcessWorkingSetSize via
-    # ctypes to force the OS to actually reclaim the pages.
-    # This is a no-op on Linux/macOS — safe to call unconditionally.
-    _windows_force_vram_release()
-    
-    translation_model = getattr(settings, "TRANSLATION_MODEL", None)
-    if not translation_model:
-        raise RuntimeError(
-            "TRANSLATION_MODEL is not set in .env. "
-            "Set it to your LLM GGUF filename (e.g. OpenAI-20B-NEOPlus-Uncensored-IQ4_NL.gguf)."
-        )
-        
-    await model_manager.load_model(translation_model)
-    logger.info("Hangoff Protocol complete. Translation model loaded.")
-
-
-def _merge_translations(parsed: list[dict], originals: list[dict]) -> list[dict]:
-    """Merge by index. Missing entries get empty english string."""
-    translation_map = {item["index"]: item.get("english", "") for item in parsed if "index" in item}
-    return [{**r, "english": translation_map.get(r.get("index"), "")} for r in originals]
-
-
-def _parse_translation_response(response: str, original_regions: list[dict]) -> list[dict]:
-    """
-    Parse the LLM's JSON response with aggressive fallback strategies.
-    Step 0 always runs first: strip markdown fences.
-    LLMs output ```json ... ``` blocks ~50% of the time
-    even with an explicit "no fences" instruction in the prompt.
-    """
-    # ── Step 0: Strip markdown fences (ALWAYS run first) ─────────────────────
-    # Handles: ```json\n...\n``` and ```\n...\n``` and stray ``` anywhere
-    cleaned = re.sub(r"```(?:json)?\s*", "", response)
-    cleaned = cleaned.replace("```", "").strip()
-    
-    # ── Strategy 1: Direct parse of cleaned response ──────────────────────────
-    try:
-        parsed = json.loads(cleaned)
-        if isinstance(parsed, list) and len(parsed) > 0:
-            return _merge_translations(parsed, original_regions)
-    except json.JSONDecodeError:
-        pass
-        
-    # ── Strategy 2: Find first '[' and last ']' in cleaned text ──────────────
-    start = cleaned.find("[")
-    end   = cleaned.rfind("]") + 1
-    
-    if start >= 0 and end > start:
-        try:
-            parsed = json.loads(cleaned[start:end])
-            if isinstance(parsed, list) and len(parsed) > 0:
-                return _merge_translations(parsed, original_regions)
-        except json.JSONDecodeError:
-            pass
-            
-    # ── Strategy 3: Parse line-by-line for individual JSON objects ────────────
-    partial = []
-    for line in cleaned.splitlines():
-        line = line.strip().rstrip(",")
-        if line.startswith("{") and line.endswith("}"):
-            try:
-                obj = json.loads(line)
-                if "index" in obj and "english" in obj:
-                    partial.append(obj)
-            except json.JSONDecodeError:
-                continue
-                
-    if partial:
-        return _merge_translations(partial, original_regions)
-        
-    # ── Strategy 4: Return originals with empty english (do not fail the job) ─
-    logger.warning(
-        "Translation response could not be parsed after fence stripping. "
-        f"Returning empty translations. Raw response head: {response[:200]}"
-    )
-    return [dict(r, english="") for r in original_regions]
-
-
-async def translate_page(regions: list[dict]) -> list[dict]:
-    """
-    Stage 5: Translate ONE page using custom 'Creative' settings.
-    """
-    if not regions:
-        return []
-        
-    input_json = json.dumps(
-        [{"index": r.get("index"), "bbox": r.get("bbox"), "japanese": r.get("japanese"), "english": ""} for r in regions],
-        ensure_ascii=False,
-        indent=2,
-    )
-    
-    system_prompt = (
-        "You are a professional manga translator specializing in Japanese to English localization.\n"
-        "You are translating a single manga page. All items below are from the same scene.\n\n"
-        "Rules:\n"
-        "- Translate ONLY the \"japanese\" field values. Fill in the \"english\" field.\n"
-        "- Keep all other fields (index, bbox) EXACTLY unchanged.\n"
-        "- Preserve character voice and tone consistently across all bubbles.\n"
-        "- For sound effects (short katakana like ドン, ガン): use punchy English equivalents (BOOM, CRASH).\n"
-        "- For narration/internal monologue: natural flowing English.\n"
-        "- Return ONLY the completed JSON array. No explanations, no markdown fences."
-    )
-    
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user",   "content": input_json},
-    ]
-    
-    response_text = ""
-    
-    # 👇 HERE IS THE HARDCODED CONFIGURATION
-    async for token in model_manager.generate_stream(
-        messages=messages,
-        max_tokens=4096,
-        
-        # 🚨 Your Custom "Creative" Settings:
-        temperature=0.5,      # High creativity
-        top_k=40,             # Standard filtering
-        top_p=0.95,           # High nucleus sampling
-        min_p=0.05,           # Cut off low-probability tokens
-        repeat_penalty=1.1,   # Reduce repetition
-        
-        stop=None,
-    ):
-        response_text += token
-        
-    return _parse_translation_response(response_text, regions)
-</file>
-
 <file path="ai_server/app/services/vision_translation_service.py">
 import json
 import logging
@@ -748,39 +564,6 @@ class Settings(BaseSettings):
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 settings = Settings()
-</file>
-
-<file path="backend/app/core/database.py">
-from typing import AsyncGenerator
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy.orm import DeclarativeBase
-
-from app.core.config import settings
-
-engine = create_async_engine(
-    settings.DATABASE_URL,
-    echo=settings.ENVIRONMENT == "development",   # log SQL in dev only
-    pool_pre_ping=True,                           # test connections before use
-)
-
-AsyncSessionLocal = async_sessionmaker(
-    engine,
-    class_=AsyncSession,
-    expire_on_commit=False,    # objects usable after commit without reload
-)
-
-class Base(DeclarativeBase):
-    pass
-
-# Dependency for FastAPI routes — yields a session, auto-commits or rolls back
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    async with AsyncSessionLocal() as session:
-        try:
-            yield session
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            raise
 </file>
 
 <file path="backend/app/core/limiter.py">
@@ -3961,94 +3744,6 @@ export const FileUploader = () => {
 export default FileUploader;
 </file>
 
-<file path="frontend/src/components/translator/JobList.tsx">
-import React from 'react';
-import { useTranslatorStore } from '@/store/translatorStore';
-import { Trash2, FileImage, Loader2, CheckCircle2, AlertCircle, Clock } from 'lucide-react';
-import { cn } from '@/lib/utils';
-
-export const JobList = () => {
-  const { jobs, activeJobId, selectJob, deleteJob } = useTranslatorStore();
-
-  const handleDelete = (e: React.MouseEvent, id: string) => {
-    e.stopPropagation(); // Prevent triggering the row click
-    if (window.confirm('Are you sure you want to delete this translation job?')) {
-      deleteJob(id);
-    }
-  };
-
-  const getStatusIcon = (status: string) => {
-    switch (status.toLowerCase()) {
-      case 'completed': return <CheckCircle2 size={14} className="text-emerald-400" />;
-      case 'processing': return <Loader2 size={14} className="text-blue-400 animate-spin" />;
-      case 'failed': return <AlertCircle size={14} className="text-red-400" />;
-      default: return <Clock size={14} className="text-white/40" />; // pending
-    }
-  };
-
-  if (jobs.length === 0) {
-    return (
-      <div className="p-4 text-center text-sm text-white/40 italic bg-surface-900/30 rounded-lg border border-white/5">
-        No translation jobs yet. Upload a file to get started.
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-2 p-1">
-      {jobs.map((job) => {
-        const isActive = job.id === activeJobId;
-        
-        return (
-          <div
-            key={job.id}
-            onClick={() => selectJob(job.id)}
-            className={cn(
-              "group relative flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-all",
-              isActive 
-                ? "bg-primary-500/10 border-primary-500/30 shadow-sm" 
-                : "bg-surface-900/50 border-white/5 hover:border-white/20 hover:bg-surface-800"
-            )}
-          >
-            <div className="flex items-center gap-3 overflow-hidden">
-              <div className="p-2 rounded bg-surface-950 text-white/60 shrink-0">
-                <FileImage size={16} />
-              </div>
-              
-              <div className="flex flex-col overflow-hidden">
-                <span className="text-sm font-medium text-white/90 truncate pr-4">
-                  {/* Assumes job object has a filename property. Fallback provided. */}
-                  {(job as any).filename || `Translation Job #${job.id.substring(0, 5)}`}
-                </span>
-                <div className="flex items-center gap-1.5 mt-0.5">
-                  {getStatusIcon((job as any).status || 'pending')}
-                  <span className="text-[10px] text-white/40 uppercase tracking-wider font-semibold">
-                    {(job as any).status || 'pending'}
-                  </span>
-                  <span className="text-[10px] text-white/20 ml-1">
-                    • {new Date((job as any).created_at || Date.now()).toLocaleDateString()}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            <button
-              onClick={(e) => handleDelete(e, job.id)}
-              className="absolute right-3 p-1.5 rounded-md text-white/20 hover:text-red-400 hover:bg-red-400/10 opacity-0 group-hover:opacity-100 transition-all"
-              title="Delete Job"
-            >
-              <Trash2 size={16} />
-            </button>
-          </div>
-        );
-      })}
-    </div>
-  );
-};
-
-export default JobList;
-</file>
-
 <file path="frontend/src/components/translator/PhaseProgress.tsx">
 import React from 'react';
 import { CheckCircle2, XCircle, Loader2, Circle } from 'lucide-react';
@@ -4134,80 +3829,6 @@ export const PhaseProgress: React.FC<PhaseProgressProps> = ({ phases }) => {
 };
 
 export default PhaseProgress;
-</file>
-
-<file path="frontend/src/components/translator/TranslationProgress.tsx">
-import { useState, useEffect } from 'react';
-import { useTranslatorStore } from '@/store/translatorStore';
-import { Loader2 } from 'lucide-react';
-
-export const TranslationProgress = () => {
-  // Destructure totalPages directly from the store
-  const { activeJobId, jobs, totalPages } = useTranslatorStore();
-  const [mountTime] = useState(Date.now());
-  const [eta, setEta] = useState<string>('Calculating...');
-
-  // Extract the active job
-  const activeJob = jobs.find((j) => j.id === activeJobId);
-
-  // Cast to any to safely extract completed_pages without modifying your service interfaces
-  const completedPages = (activeJob as any)?.completed_pages || (activeJob as any)?.completedPages || 0;
-  const isProcessing = activeJob?.status === 'processing';
-
-  // Calculate ETA based on elapsed time and pages processed
-  useEffect(() => {
-    if (!isProcessing || completedPages === 0) {
-      setEta('Calculating...');
-      return;
-    }
-
-    const elapsedMs = Date.now() - mountTime;
-    const msPerPage = elapsedMs / completedPages;
-    const pagesRemaining = Math.max(0, totalPages - completedPages);
-    const msRemaining = msPerPage * pagesRemaining;
-
-    const remainingSeconds = Math.ceil(msRemaining / 1000);
-
-    if (remainingSeconds < 60) {
-      setEta(`${remainingSeconds}s remaining`);
-    } else {
-      const minutes = Math.floor(remainingSeconds / 60);
-      const seconds = remainingSeconds % 60;
-      setEta(`${minutes}m ${seconds}s remaining`);
-    }
-  }, [completedPages, totalPages, isProcessing, mountTime]);
-
-  if (!isProcessing) return null;
-
-  const progressPercent = Math.min(((completedPages / Math.max(1, totalPages)) * 100), 100);
-
-  return (
-    <div className="w-full max-w-xl mx-auto mt-6 p-4 rounded-xl bg-surface-900/50 border border-primary-500/20 shadow-[0_0_30px_rgba(16,185,129,0.05)] animate-in fade-in slide-in-from-bottom-4">
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2 text-primary-400">
-          <Loader2 size={18} className="animate-spin" />
-          <span className="text-sm font-semibold animate-pulse">
-            Translating page {completedPages} of {totalPages}...
-          </span>
-        </div>
-        <span className="text-xs font-medium text-white/50 font-mono">
-          {eta}
-        </span>
-      </div>
-
-      <div className="h-2 w-full bg-surface-950 rounded-full overflow-hidden border border-white/5">
-        <div 
-          className="h-full bg-gradient-to-r from-primary-600 to-primary-400 rounded-full transition-all duration-500 ease-out relative"
-          style={{ width: `${progressPercent}%` }}
-        >
-          <div className="absolute inset-0 bg-white/20 w-full animate-[shimmer_2s_infinite] -skew-x-12 translate-x-[-100%]" />
-        </div>
-      </div>
-    </div>
-  );
-};
-
-export default TranslationProgress;
 </file>
 
 <file path="frontend/src/components/ui/Badge.tsx">
@@ -5395,146 +5016,6 @@ export function useLocalStorage<T>(key: string, defaultValue: T): [T, (value: T 
 }
 
 export default useLocalStorage;
-</file>
-
-<file path="frontend/src/hooks/usePageStream.ts">
-import { useState, useEffect, useRef } from 'react'
-import { useTranslatorStore } from '@/store/translatorStore'
-import type { TranslationRegion, RegionStreamEvent } from '@/types/translator.types'
-import { useAuthStore } from '@/store/authStore'
-
-interface UsePageStreamResult {
-  regions: TranslationRegion[]
-  isDone: boolean
-  isWaiting: boolean
-  error: string | null
-}
-
-export function usePageStream(
-  jobId: string | null,
-  pageNumber: number
-): UsePageStreamResult {
-  const [regions, setRegions]     = useState<TranslationRegion[]>([])
-  const [isDone, setIsDone]       = useState(false)
-  const [isWaiting, setIsWaiting] = useState(false)
-  const [error, setError]         = useState<string | null>(null)
-  
-  const sourceRef                 = useRef<EventSource | null>(null)
-  
-  // Note: Cast to 'any' temporarily until pageRegions is added to the TranslatorState interface
-  const cachedRegions = useTranslatorStore(s => 
-    jobId ? (s as any).pageRegions?.[pageNumber] : undefined
-  ) as TranslationRegion[] | undefined
-
-  const token   = useAuthStore(s => s.token)
-  const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-
-  useEffect(() => {
-    // 1. Reset all state when jobId or pageNumber changes
-    setRegions([])
-    setIsDone(false)
-    setIsWaiting(false)
-    setError(null)
-
-    // 2. If jobId is null, return early
-    if (!jobId) return
-
-    // 3. If cachedRegions is defined (page already processed): skip connection
-    if (cachedRegions && cachedRegions.length > 0) {
-      setRegions(cachedRegions)
-      setIsDone(true)
-      return
-    }
-
-    // 4. Setup AbortController for clean teardown on unmount / dependency change
-    const abortController = new AbortController()
-
-    const fetchStream = async () => {
-      try {
-        const response = await fetch(`${baseUrl}/api/v1/translate/jobs/${jobId}/pages/${pageNumber}/stream`, {
-          headers: { 
-            Authorization: `Bearer ${token}`,
-            Accept: 'text/event-stream'
-          },
-          signal: abortController.signal
-        })
-
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`)
-        }
-
-        const reader = response.body!.getReader()
-        const decoder = new TextDecoder()
-        let buffer = ''
-
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-
-          buffer += decoder.decode(value, { stream: true })
-          
-          // Split chunks by newline, keeping the last incomplete fragment in the buffer
-          const lines = buffer.split('\n')
-          buffer = lines.pop() || ''
-
-          for (const line of lines) {
-            if (line.trim() === '') continue
-            
-            if (line.startsWith('data: ')) {
-              const dataStr = line.slice(6).trim()
-              if (!dataStr) continue
-
-              try {
-                const event = JSON.parse(dataStr) as RegionStreamEvent
-
-                // Handle: { waiting: true }
-                if ('waiting' in event && event.waiting) {
-                  setIsWaiting(true)
-                } 
-                // Handle: Region arrival (has bbox)
-                else if ('bbox' in event) {
-                  setIsWaiting(false)
-                  setRegions(prev => {
-                    const next = [...prev]
-                    next[event.index] = event // Sparse array assignment (handles out-of-order)
-                    return next
-                  })
-                } 
-                // Handle: { done: true } or { error: string, done: true }
-                else if ('done' in event && event.done) {
-                  if ('error' in event) {
-                    setError(event.error)
-                  }
-                  setIsDone(true)
-                  setIsWaiting(false)
-                  reader.cancel()
-                  return // Exit the loop and close stream
-                }
-              } catch (err) {
-                console.error('Failed to parse SSE JSON event:', err, dataStr)
-              }
-            }
-          }
-        }
-      } catch (err: any) {
-        // Ignore AbortError since it's an expected teardown behavior
-        if (err.name !== 'AbortError') {
-          setError(err.message || 'Stream connection failed')
-          setIsDone(true)
-        }
-      }
-    }
-
-    fetchStream()
-
-    // 5. Cleanup: aborting the controller immediately cancels the fetch & reader
-    return () => {
-      abortController.abort()
-    }
-  }, [jobId, pageNumber, cachedRegions, baseUrl, token])
-
-  return { regions, isDone, isWaiting, error }
-}
 </file>
 
 <file path="frontend/src/hooks/usePhaseStream.ts">
@@ -7657,6 +7138,196 @@ class ModelManager:
 model_manager = ModelManager()
 </file>
 
+<file path="ai_server/app/services/translation_pipeline_service.py">
+import gc
+import re
+import json
+import asyncio
+import platform
+import logging
+import torch # type: ignore
+
+from app.services.ocr_pipeline_service import ocr_pipeline_service
+from app.services.model_manager import model_manager
+from app.core.config import settings
+
+logger = logging.getLogger(__name__)
+
+def _windows_force_vram_release() -> None:
+    """
+    Force the Windows OS to reclaim GPU memory pages after PyTorch del + empty_cache().
+    No-op on Linux/macOS.
+    Copy the implementation from model_manager.py where it already exists.
+    """
+    if platform.system() != "Windows":
+        return
+    
+    try:
+        import ctypes
+        # -1, -1 forces the OS to aggressively swap out unused memory pages
+        ctypes.windll.kernel32.SetProcessWorkingSetSize(-1, -1, -1)
+        logger.info("Windows OS-level VRAM release triggered.")
+    except Exception as e:
+        logger.warning(f"Failed to force Windows VRAM release: {e}")
+        pass   # best-effort — do not crash the pipeline if ctypes fails
+
+
+async def hangoff_protocol() -> None:
+    """
+    Stage 4: Unload PyTorch models, force OS-level VRAM reclaim (Windows),
+    then load Qwen 35B / OpenAI 20B via llama.cpp.
+    Call only after all OCR pipeline work is complete.
+    """
+    logger.info("Executing Hangoff Protocol...")
+    
+    # Unload both detector + OCR models in one call
+    ocr_pipeline_service.unload()
+    
+    # Standard PyTorch cache flush
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+        
+    gc.collect()
+    
+    # ── Windows VRAM Ghost Memory Fix ────────────────────────────────────────
+    # On Windows, PyTorch's empty_cache() marks the memory as free internally
+    # but does NOT yield it back to the OS. llama.cpp then fails to get a
+    # contiguous 22GB block for the LLM and throws CUDA OOM.
+    # _windows_force_vram_release() calls Win32 SetProcessWorkingSetSize via
+    # ctypes to force the OS to actually reclaim the pages.
+    # This is a no-op on Linux/macOS — safe to call unconditionally.
+    _windows_force_vram_release()
+    
+    translation_model = getattr(settings, "TRANSLATION_MODEL", None)
+    if not translation_model:
+        raise RuntimeError(
+            "TRANSLATION_MODEL is not set in .env. "
+            "Set it to your LLM GGUF filename (e.g. OpenAI-20B-NEOPlus-Uncensored-IQ4_NL.gguf)."
+        )
+        
+    await model_manager.load_model(translation_model)
+    logger.info("Hangoff Protocol complete. Translation model loaded.")
+
+
+def _merge_translations(parsed: list[dict], originals: list[dict]) -> list[dict]:
+    """Merge by index. Missing entries get empty english string."""
+    translation_map = {item["index"]: item.get("english", "") for item in parsed if "index" in item}
+    return [{**r, "english": translation_map.get(r.get("index"), "")} for r in originals]
+
+
+def _parse_translation_response(response: str, original_regions: list[dict]) -> list[dict]:
+    """
+    Parse the LLM's JSON response with aggressive fallback strategies.
+    Step 0 always runs first: strip markdown fences.
+    LLMs output ```json ... ``` blocks ~50% of the time
+    even with an explicit "no fences" instruction in the prompt.
+    """
+    # ── Step 0: Strip markdown fences (ALWAYS run first) ─────────────────────
+    # Handles: ```json\n...\n``` and ```\n...\n``` and stray ``` anywhere
+    cleaned = re.sub(r"```(?:json)?\s*", "", response)
+    cleaned = cleaned.replace("```", "").strip()
+    
+    # ── Strategy 1: Direct parse of cleaned response ──────────────────────────
+    try:
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, list) and len(parsed) > 0:
+            return _merge_translations(parsed, original_regions)
+    except json.JSONDecodeError:
+        pass
+        
+    # ── Strategy 2: Find first '[' and last ']' in cleaned text ──────────────
+    start = cleaned.find("[")
+    end   = cleaned.rfind("]") + 1
+    
+    if start >= 0 and end > start:
+        try:
+            parsed = json.loads(cleaned[start:end])
+            if isinstance(parsed, list) and len(parsed) > 0:
+                return _merge_translations(parsed, original_regions)
+        except json.JSONDecodeError:
+            pass
+            
+    # ── Strategy 3: Parse line-by-line for individual JSON objects ────────────
+    partial = []
+    for line in cleaned.splitlines():
+        line = line.strip().rstrip(",")
+        if line.startswith("{") and line.endswith("}"):
+            try:
+                obj = json.loads(line)
+                if "index" in obj and "english" in obj:
+                    partial.append(obj)
+            except json.JSONDecodeError:
+                continue
+                
+    if partial:
+        return _merge_translations(partial, original_regions)
+        
+    # ── Strategy 4: Return originals with empty english (do not fail the job) ─
+    logger.warning(
+        "Translation response could not be parsed after fence stripping. "
+        f"Returning empty translations. Raw response head: {response[:200]}"
+    )
+    return [dict(r, english="") for r in original_regions]
+
+
+async def translate_page(regions: list[dict]) -> list[dict]:
+    """
+    Stage 5: Translate ONE page using custom 'Sugoi' settings.
+    Includes terminal streaming for debug visibility.
+    """
+    if not regions:
+        return []
+        
+    input_json = json.dumps(
+        [{"index": r.get("index"), "bbox": r.get("bbox"), "japanese": r.get("japanese"), "english": ""} for r in regions],
+        ensure_ascii=False,
+        indent=2,
+    )
+    
+    # ♻️ UPDATED PROMPT: Adds a "One-Shot" Example to prevent echoing
+    system_prompt = (
+        "You are a professional manga translator. Your task is to fill the empty 'english' field in the provided JSON.\n"
+        "Rules:\n"
+        "1. Translate the text in the 'japanese' field to English.\n"
+        "2. Put the translation ONLY in the 'english' field.\n"
+        "3. If the text is already English, copy it to the 'english' field.\n"
+        "4. Return ONLY the JSON array.\n\n"
+        "Example Interaction:\n"
+        "User: [{\"index\": 0, \"japanese\": \"こんにちは\", \"english\": \"\"}]\n"
+        "Assistant: [{\"index\": 0, \"japanese\": \"こんにちは\", \"english\": \"Hello there.\"}]\n\n"
+        "Now process this real data:"
+    )
+    
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user",   "content": input_json},
+    ]
+    
+    response_text = ""
+    
+    print(f"\n🔹 [Sugoi-14B] Translating {len(regions)} bubbles...")
+    print("---------------------------------------------------")
+
+    async for token in model_manager.generate_stream(
+        messages=messages,
+        max_tokens=4096,
+        temperature=0.3,      
+        top_k=40,             
+        top_p=0.9,            
+        min_p=0.05,           
+        repeat_penalty=1.1,   
+        stop=None,
+    ):
+        print(token, end="", flush=True)
+        response_text += token
+        
+    print("\n---------------------------------------------------")
+    print("✅ [Sugoi-14B] Generation Complete.\n")
+
+    return _parse_translation_response(response_text, regions)
+</file>
+
 <file path="ai_server/app/services/translation_service.py">
 import logging
 
@@ -7672,6 +7343,41 @@ async def translate_image_file(image_path: str, source_language: str, target_lan
         "status": "success", 
         "message": "Legacy translation endpoint reached. Please use V2 pipeline endpoints."
     }
+</file>
+
+<file path="backend/app/core/database.py">
+from typing import AsyncGenerator
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.orm import DeclarativeBase
+
+from app.core.config import settings
+
+engine = create_async_engine(
+    settings.DATABASE_URL,
+    echo=False,  
+    future=True,
+    pool_pre_ping=True                        # test connections before use
+)
+
+AsyncSessionLocal = async_sessionmaker(
+    bind=engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+    autoflush=False,
+)
+
+class Base(DeclarativeBase):
+    pass
+
+# Dependency for FastAPI routes — yields a session, auto-commits or rolls back
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.close()
+            raise
 </file>
 
 <file path="backend/app/models/translator.py">
@@ -7900,447 +7606,6 @@ async def send_message(
 async def list_models(current_user: User = Depends(get_current_user)):
     """Proxy to the AI server to get available models."""
     return await chat_service.get_available_models()
-</file>
-
-<file path="backend/app/routers/translator.py">
-import asyncio
-import aiofiles
-import json
-from pathlib import Path
-from typing import List, Optional
-from uuid import UUID
-
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, BackgroundTasks, Request
-from fastapi.responses import FileResponse, StreamingResponse
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-
-from slowapi import Limiter
-from slowapi.util import get_remote_address
-
-from app.core.config import settings
-from app.core.database import get_db, AsyncSessionLocal
-from app.dependencies.auth import get_current_user
-from app.models.user import User
-from app.models.translator import TranslationJob, TranslationPage
-from app.schemas.translator import JobResponse, JobDetailResponse
-from app.services import translator_service
-
-router = APIRouter()
-limiter = Limiter(key_func=get_remote_address)
-
-# Magic bytes definitions for strict file validation
-MAGIC_BYTES = {
-    "jpg": b"\xff\xd8\xff",
-    "png": b"\x89\x50\x4e\x47",
-    "zip": b"\x50\x4b\x03\x04",  # Also covers .cbz files
-}
-
-@router.post("/upload", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
-@limiter.limit("5/minute")
-async def upload_file(
-    request: Request,
-    background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
-    source_language: Optional[str] = Form(None), 
-    target_language: Optional[str] = Form(None), 
-    engine: Optional[str] = Form(None),          
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Upload an image or CBZ/ZIP archive for translation.
-    Processing happens asynchronously in the background based on the selected engine.
-    """
-    # Bulletproof defaults:
-    source_language = source_language or "auto"
-    target_language = target_language or "en"
-    
-    # Engine fallback - Default to the new 6-stage pipeline
-    valid_engines = {"pipeline", "vision", "ocr_llm"}
-    if not engine or engine not in valid_engines:
-        engine = "pipeline"
-
-    # 1. Validate file size
-    max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
-    if file.size and file.size > max_bytes:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"File exceeds maximum allowed size of {settings.MAX_UPLOAD_SIZE_MB}MB."
-        )
-
-    # 2. Validate file type via magic bytes
-    header = await file.read(4)
-    await file.seek(0)  # Reset cursor for actual saving
-    
-    is_valid_type = (
-        header.startswith(MAGIC_BYTES["jpg"]) or 
-        header.startswith(MAGIC_BYTES["png"]) or 
-        header.startswith(MAGIC_BYTES["zip"])
-    )
-    
-    if not is_valid_type:
-        raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail="Invalid file format. Only JPG, PNG, and ZIP/CBZ are allowed."
-        )
-
-    # 3. Create TranslationJob in DB to get the job ID
-    job = await translator_service.create_translation_job(
-        db=db, 
-        user_id=current_user.id, 
-        filename=file.filename,
-        file_size=file.size,
-        source_lang=source_language,
-        target_lang=target_language
-    )
-
-    # 4. Save file to disk
-    original_dir = Path(settings.UPLOAD_DIR) / str(current_user.id) / str(job.id) / "original"
-    original_dir.mkdir(parents=True, exist_ok=True)
-    file_path = original_dir / file.filename
-
-    async with aiofiles.open(file_path, "wb") as out_file:
-        while content := await file.read(1024 * 1024):  # 1MB chunks to prevent memory spikes
-            await out_file.write(content)
-
-    # 5. Update job with the actual saved file path and set engine
-    job = await translator_service.update_job_file_path(db, job.id, str(file_path))
-    job.engine = engine
-    await db.commit()
-
-    # 6. Dispatch background processing task based on selected engine
-    if engine == "ocr_llm":
-        background_tasks.add_task(translator_service.process_job, job.id, db)
-    elif engine == "vision":
-        background_tasks.add_task(translator_service.process_job_vision, job.id)
-    else:
-        background_tasks.add_task(translator_service.process_job_pipeline, job.id)
-
-    return job
-
-@router.get("/jobs", response_model=List[JobResponse])
-async def list_jobs(
-    skip: int = 0,
-    limit: int = 50,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """List current user's translation jobs (newest first)."""
-    return await translator_service.get_user_jobs(db, current_user.id, skip, limit)
-
-@router.get("/jobs/{job_id}", response_model=JobDetailResponse)
-async def get_job_detail(
-    job_id: UUID,  
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """Get specific job details including all its pages."""
-    return await translator_service.get_job_detail(db, current_user.id, job_id)
-
-@router.get("/jobs/{job_id}/pages/{page_number}/pipeline-progress")
-async def pipeline_progress(
-    job_id: UUID,
-    page_number: int,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    SSE stream of pipeline stage progress for a single page.
-    Polls DB every 500ms for phase_status changes.
-    Late-connecting clients (after completion) receive a synthetic full history.
-    """
-    # Verify job ownership
-    job = await db.get(TranslationJob, job_id)
-    if not job or job.user_id != current_user.id:
-        raise HTTPException(404, "Job not found")
-
-    PHASE_NAMES = {
-        "detecting":   (1, "Detecting text regions"),
-        "cropping":    (2, "Cropping bubbles"),
-        "ocr":         (3, "Reading Japanese text"),
-        "translating": (5, "Translating with Qwen 35B"),
-        "done":        (6, "Complete"),
-        "failed":      (0, "Failed"),
-    }
-
-    async def event_generator():
-        last_phase_status = None
-        while True:
-            await asyncio.sleep(0.5)
-            
-            async with AsyncSessionLocal() as stream_db:
-                result = await stream_db.execute(
-                    select(TranslationPage).where(
-                        TranslationPage.job_id == job_id,
-                        TranslationPage.page_number == page_number,
-                    )
-                )
-                page = result.scalar_one_or_none()
-
-            if page is None:
-                yield f"data: {json.dumps({'waiting': True})}\n\n"
-                continue
-
-            status = page.phase_status
-
-            # Emit event when phase changes
-            if status != last_phase_status:
-                stage_num, stage_name = PHASE_NAMES.get(status, (0, status))
-                
-                if status == "done" and page.regions_json:
-                    # Stage 6: emit all regions
-                    regions = json.loads(page.regions_json)
-                    yield f"data: {json.dumps({'stage':4,'name':'Hangoff Protocol — loading Qwen 35B','status':'done'})}\n\n"
-                    yield f"data: {json.dumps({'stage':5,'name':'Translating with Qwen 35B','status':'done'})}\n\n"
-                    yield f"data: {json.dumps({'stage':6,'name':'Complete','status':'done','regions':regions})}\n\n"
-                    return
-                elif status == "failed":
-                    yield f"data: {json.dumps({'stage':0,'name':'Failed','status':'failed','error':page.error_message})}\n\n"
-                    return
-                else:
-                    yield f"data: {json.dumps({'stage':stage_num,'name':stage_name,'status':'running'})}\n\n"
-                    
-                last_phase_status = status
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control":      "no-cache",
-            "X-Accel-Buffering":  "no",
-            "Connection":         "keep-alive",
-        },
-    )
-
-@router.get("/jobs/{job_id}/pages/{page_number}/stream")
-async def stream_page_regions(
-    job_id: UUID,
-    page_number: int,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Legacy SSE stream for the vision single-pass pipeline."""
-    job = await db.get(TranslationJob, job_id)
-    if not job or job.user_id != current_user.id:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    async def event_generator():
-        last_region_count = 0
-        while True:
-            await asyncio.sleep(0.5)
-            
-            async with AsyncSessionLocal() as stream_db:
-                current_job = await stream_db.get(TranslationJob, job_id)
-                if current_job and current_job.status == "failed":
-                    error_msg = current_job.error_message or "Job processing failed catastrophically."
-                    yield f"data: {json.dumps({'error': error_msg, 'done': True})}\n\n"
-                    return
-
-                result = await stream_db.execute(
-                    select(TranslationPage).where(
-                        TranslationPage.job_id == job_id,
-                        TranslationPage.page_number == page_number,
-                    )
-                )
-                page = result.scalar_one_or_none()
-
-            if page is None:
-                yield f"data: {json.dumps({'waiting': True})}\n\n"
-                continue
-
-            if page.processing_status == "failed":
-                error_msg = page.error_message or "AI processing failed."
-                yield f"data: {json.dumps({'error': error_msg, 'done': True})}\n\n"
-                return
-
-            if page.regions_json is None:
-                yield f"data: {json.dumps({'waiting': True})}\n\n"
-                continue
-
-            regions = json.loads(page.regions_json)
-            for region in regions[last_region_count:]:
-                yield f"data: {json.dumps(region, ensure_ascii=False)}\n\n"
-            
-            last_region_count = len(regions)
-
-            if page.processing_status in ("completed", "no_text"):
-                total = len(regions)
-                yield f"data: {json.dumps({'done': True, 'total_regions': total, 'page_number': page_number})}\n\n"
-                return
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-            "Connection": "keep-alive",
-        },
-    )
-
-@router.get("/jobs/{job_id}/pages/{page_number}/regions")
-async def get_page_regions(
-    job_id: UUID,
-    page_number: int,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Fetch parsed regions for a completed page without keeping an SSE connection open.
-    """
-    job = await db.get(TranslationJob, job_id)
-    if not job or job.user_id != current_user.id:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    stmt = select(TranslationPage).where(
-        TranslationPage.job_id == job_id,
-        TranslationPage.page_number == page_number
-    )
-    result = await db.execute(stmt)
-    page = result.scalar_one_or_none()
-
-    if not page:
-        raise HTTPException(status_code=404, detail="Page not found")
-
-    regions = []
-    if page.regions_json:
-        try:
-            regions = json.loads(page.regions_json)
-        except json.JSONDecodeError:
-            pass
-
-    return {
-        "regions": regions,
-        "page_number": page.page_number,
-        "has_text": page.has_text
-    }
-
-@router.post("/jobs/{job_id}/retranslate", status_code=status.HTTP_202_ACCEPTED)
-async def retranslate_job(
-    job_id: UUID,
-    background_tasks: BackgroundTasks,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Reset a job's status and enqueue it for re-translation.
-    Dispatch logic supports both the new Pipeline and the legacy Vision engine.
-    """
-    # 1. Reset the DB state (clears phase_status, regions_json, etc.)
-    job = await translator_service.reset_job_for_retranslation(db, current_user.id, job_id)
-    
-    # 2. Dispatch the correct background task based on the job's engine
-    if job.engine == "pipeline":
-        background_tasks.add_task(translator_service.process_job_pipeline, job.id)
-    elif job.engine == "vision":
-        background_tasks.add_task(translator_service.process_job_vision, job.id)
-    else:
-        # Legacy fallback (ocr_llm)
-        background_tasks.add_task(translator_service.process_job, job.id, db)
-        
-    return {"message": f"Job queued for {job.engine} re-translation"}
-
-@router.delete("/jobs/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_job(
-    job_id: UUID,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """Delete a job, its database records, and all related files on disk."""
-    await translator_service.delete_translation_job(db, current_user.id, job_id)
-    return None
-
-@router.get("/jobs/{job_id}/pages/{page_num}/original")
-async def get_original_page(
-    job_id: UUID,
-    page_num: int,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """Serve the original un-translated image page with a retry buffer for the background task."""
-    max_retries = 10  # Up to 5 seconds of buffering
-    
-    for attempt in range(max_retries):
-        try:
-            file_path = await translator_service.get_page_file_path(
-                db=db, 
-                user_id=current_user.id, 
-                job_id=job_id, 
-                page_num=page_num, 
-                image_type="original"
-            )
-            return FileResponse(file_path)
-        except HTTPException as e:
-            if e.status_code == 404 and "not found" in e.detail and attempt < max_retries - 1:
-                await asyncio.sleep(0.5)
-                continue
-            raise e
-
-@router.get("/jobs/{job_id}/pages/{page_num}/translated")
-async def get_translated_page(
-    job_id: UUID,
-    page_num: int,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Serve the translated image. 
-    Fallback: If translated image isn't ready (streaming), serve the original.
-    Includes a retry buffer to prevent race conditions during DB initialization.
-    """
-    max_retries = 10
-    
-    for attempt in range(max_retries):
-        try:
-            file_path = await translator_service.get_page_file_path(
-                db=db, 
-                user_id=current_user.id, 
-                job_id=job_id, 
-                page_num=page_num, 
-                image_type="translated"
-            )
-            return FileResponse(file_path)
-            
-        except HTTPException as e:
-            if e.status_code == 404:
-                if "not found for this job" in e.detail.lower() and attempt < max_retries - 1:
-                    await asyncio.sleep(0.5)
-                    continue
-                
-                try:
-                    orig_path = await translator_service.get_page_file_path(
-                        db=db, 
-                        user_id=current_user.id, 
-                        job_id=job_id, 
-                        page_num=page_num, 
-                        image_type="original"
-                    )
-                    return FileResponse(orig_path)
-                except HTTPException as inner_e:
-                    if inner_e.status_code == 404 and attempt < max_retries - 1:
-                        await asyncio.sleep(0.5)
-                        continue
-                    
-                    if attempt == max_retries - 1:
-                        raise inner_e
-            else:
-                raise e
-
-@router.get("/jobs/{job_id}/download")
-async def download_translated_job(
-    job_id: str,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """Stream an in-memory ZIP archive of all translated pages."""
-    zip_stream = await translator_service.create_zip_stream(db, current_user.id, job_id)
-    
-    return StreamingResponse(
-        zip_stream,
-        media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="translated_{job_id}.zip"'}
-    )
 </file>
 
 <file path="backend/app/schemas/chat.py">
@@ -8687,458 +7952,6 @@ async def stream_chat_response(db: AsyncSession, user_id: str, conversation_id: 
                 generation_ms=generation_ms,
                 model=target_model
             )
-</file>
-
-<file path="backend/app/services/translator_service.py">
-import base64
-import json
-import shutil
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import AsyncGenerator
-from uuid import UUID
-from fastapi import HTTPException
-from sqlalchemy.orm import selectinload
-from sqlalchemy import desc, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.models.translator import TranslationJob, TranslationPage
-from app.utils.ai_client import ai_client
-from app.utils.image_utils import resize_image_for_ocr
-from app.utils.zip_utils import create_zip_stream as generate_zip_stream
-from app.services import file_service
-
-
-async def process_job_vision(job_id: UUID) -> None:
-    """
-    Background task for the vision pipeline.
-    IMPORTANT: Creates its own DB session — never use a request-scoped session here.
-    """
-    from app.core.database import AsyncSessionLocal
-    
-    async with AsyncSessionLocal() as db:
-        try:
-            await _run_vision_job(db, job_id)
-        except Exception as e:
-            # Last-resort error catch — update status even if inner function failed
-            async with AsyncSessionLocal() as err_db:
-                job = await err_db.get(TranslationJob, job_id)
-                if job and job.status != "failed":
-                    job.status = "failed"
-                    job.error_message = f"Unhandled error: {e}"
-                    await err_db.commit()
-            raise
-
-async def _run_vision_job(db: AsyncSession, job_id: UUID) -> None:
-    # Step 1: Fetch the job and mark as processing
-    stmt = select(TranslationJob).where(TranslationJob.id == job_id)
-    result = await db.execute(stmt)
-    job = result.scalar_one_or_none()
-    
-    if not job:
-        return
-
-    job.status = "processing"
-    job.started_at = datetime.now(timezone.utc)
-    await db.commit()
-
-    try:
-        # Step 2: Get image paths
-        job_dir = file_service.get_upload_dir(job.user_id, job.id)
-        original_dir = job_dir / "original"
-        image_paths = sorted([str(p) for p in original_dir.glob("*") if p.is_file()])
-
-        # Step 3: Process each page
-        for page_number, img_path in enumerate(image_paths, start=1):
-            
-            # Upsert: Check if the page already exists
-            stmt = select(TranslationPage).where(
-                TranslationPage.job_id == job_id,
-                TranslationPage.page_number == page_number
-            )
-            result = await db.execute(stmt)
-            page = result.scalar_one_or_none()
-
-            if not page:
-                page = TranslationPage(
-                    job_id=job_id,
-                    page_number=page_number,
-                    original_path=img_path,
-                    processing_status="processing",
-                )
-                db.add(page)
-            else:
-                page.processing_status = "processing"
-                page.error_message = None
-                page.regions_json = None
-                page.translated_path = None
-                page.has_text = False
-                
-            await db.commit()
-            await db.refresh(page)
-
-            try:
-                # Encode image to base64
-                with open(img_path, "rb") as f:
-                    image_b64 = base64.b64encode(f.read()).decode("utf-8")
-
-                regions = []
-                async for chunk in ai_client.translate_image_vision_stream(
-                    image_base64=image_b64,
-                    source_language=job.source_language,
-                    target_language=job.target_language,
-                ):
-                    # 1. Parse the clean string generated by aiter_lines()
-                    if isinstance(chunk, dict):
-                        data = chunk
-                    else:
-                        try:
-                            data = json.loads(chunk)
-                        except json.JSONDecodeError:
-                            print(f"Backend Warning: Could not parse chunk: {chunk}")
-                            continue
-
-                    # 2. Handle End of Stream
-                    if data.get("done") is True:
-                        break
-                        
-                    if data.get("error"):
-                        raise RuntimeError(data["error"])
-
-                    # 3. Handle valid regions
-                    if "bbox" in data:
-                        regions.append(data)
-                        
-                        # Live commit so frontend sees progress
-                        page.regions_json = json.dumps(regions, ensure_ascii=False)
-                        page.has_text = True
-                        await db.commit()
-
-                # 5. Guaranteed Save on Success
-                page.translated_path = img_path
-                page.has_text = len(regions) > 0
-                page.processing_status = "completed" if regions else "no_text"
-                await db.commit()
-
-            except Exception as e:
-                # 6. INNER CATCH: Fails a single page and breaks the loop safely
-                await db.rollback() # Clear any hanging transactions
-                
-                page.processing_status = "failed"
-                page.error_message = str(e)
-                await db.commit()
-                
-                job.status = "failed"
-                job.error_message = f"Page {page_number} failed: {str(e)}"
-                await db.commit()
-                
-                print(f"Backend Task Failed on Page {page_number}: {e}")
-                break # <-- Legal here because it is indented inside the 'for' loop
-
-        # Step 4: Mark the entire job as complete (if no pages failed)
-        if job.status != "failed":
-            job.status = "completed"
-            job.completed_at = datetime.now(timezone.utc)
-            await db.commit()
-
-    except Exception as e:
-        # 7. OUTER CATCH: Catastrophic failure (e.g., file reading errors)
-        # NO break statement here!
-        await db.rollback()
-        job.status = "failed"
-        job.error_message = f"Unhandled error: {str(e)}"
-        await db.commit()
-        print(f"Backend Task Catastrophic Failure: {e}")
-        
-async def create_zip_stream(job_id: UUID, db: AsyncSession) -> AsyncGenerator[bytes, None]:
-    """
-    Stream a ZIP of all translated pages without loading all into memory.
-    """
-    stmt = select(TranslationPage).where(TranslationPage.job_id == job_id).order_by(TranslationPage.page_number)
-    result = await db.execute(stmt)
-    pages = result.scalars().all()
-
-    file_paths = []
-    for page in pages:
-        # Use translated path if available, fallback to original
-        source_path = page.translated_path or page.original_path
-        if source_path and Path(source_path).exists():
-            name_in_zip = f"page_{page.page_number:03d}{Path(source_path).suffix}"
-            file_paths.append((source_path, name_in_zip))
-
-    # Yield the async generator directly from zip_utils
-    async for chunk in generate_zip_stream(file_paths):
-        yield chunk
-        
-# ─── CRUD Helper Methods ──────────────────────────────────────────────────
-
-async def create_translation_job(db: AsyncSession, user_id: UUID, filename: str, file_size: int, source_lang: str, target_lang: str) -> TranslationJob:
-    job = TranslationJob(
-        user_id=user_id, 
-        original_filename=filename, 
-        file_path="",  # <-- Add this temporary placeholder!
-        file_size_bytes=file_size, 
-        source_language=source_lang, 
-        target_language=target_lang
-    )
-    db.add(job)
-    await db.commit()
-    await db.refresh(job)
-    return job
-
-async def update_job_file_path(db: AsyncSession, job_id: UUID, file_path: str) -> TranslationJob:
-    job = await db.get(TranslationJob, job_id)
-    job.file_path = file_path
-    await db.commit()
-    await db.refresh(job)
-    return job
-
-async def get_user_jobs(db: AsyncSession, user_id: UUID, skip: int, limit: int) -> list[TranslationJob]:
-    stmt = select(TranslationJob).where(TranslationJob.user_id == user_id).order_by(desc(TranslationJob.created_at)).offset(skip).limit(limit)
-    result = await db.execute(stmt)
-    return list(result.scalars().all())
-
-async def get_job_detail(db: AsyncSession, user_id: UUID, job_id: str) -> TranslationJob:
-    stmt = select(TranslationJob).where(
-        TranslationJob.id == job_id, 
-        TranslationJob.user_id == user_id
-    ).options(selectinload(TranslationJob.pages))
-    
-    result = await db.execute(stmt)
-    job = result.scalar_one_or_none()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    return job
-
-async def reset_job_for_retranslation(db: AsyncSession, user_id: UUID, job_id: UUID) -> TranslationJob:
-    # Fetch job with pages loaded
-    stmt = select(TranslationJob).where(
-        TranslationJob.id == job_id, 
-        TranslationJob.user_id == user_id
-    ).options(selectinload(TranslationJob.pages))
-    
-    result = await db.execute(stmt)
-    job = result.scalar_one_or_none()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-        
-    # 1. Reset Job Level
-    job.status = "pending"
-    job.error_message = None
-    job.completed_at = None
-    # Note: We do NOT reset the 'engine' here anymore, we let the router decide.
-    
-    # 2. Reset Page Level (Critical for Pipeline restart)
-    for page in job.pages:
-        page.processing_status = "pending"
-        page.phase_status = "pending"  # <--- Reset pipeline stage to 0
-        page.regions_json = None       # <--- Clear old bubbles
-        page.translated_path = None
-        page.error_message = None
-        page.has_text = False
-        page.processing_ms = None
-    
-    await db.commit()
-    await db.refresh(job)
-    return job
-
-async def delete_translation_job(db: AsyncSession, user_id: UUID, job_id: UUID) -> None: # <-- Changed to UUID
-    stmt = select(TranslationJob).where(TranslationJob.id == job_id, TranslationJob.user_id == user_id)
-    result = await db.execute(stmt)
-    job = result.scalar_one_or_none()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-        
-    # Delete from disk
-    job_dir = file_service.get_upload_dir(user_id, job.id)
-    if job_dir.exists():
-        shutil.rmtree(job_dir)
-        
-    # Delete from DB
-    await db.delete(job)
-    await db.commit()
-
-async def get_page_file_path(
-    db: AsyncSession, 
-    user_id: UUID, 
-    job_id: UUID,  # <-- Explicitly named and typed
-    page_num: int, 
-    image_type: str
-) -> str:
-    """
-    Retrieves the physical path for a page image.
-    Checks ownership and verifies the file exists on the filesystem.
-    """
-    stmt = select(TranslationPage).join(TranslationJob).where(
-        TranslationJob.user_id == user_id,
-        TranslationPage.job_id == job_id,
-        TranslationPage.page_number == page_num
-    )
-    result = await db.execute(stmt)
-    page = result.scalar_one_or_none()
-    
-    if not page:
-        raise HTTPException(status_code=404, detail=f"Page {page_num} not found for this job")
-        
-    target_path = page.translated_path if image_type == "translated" else page.original_path
-    
-    if not target_path or not Path(target_path).exists():
-        # If it's the original and it's missing, that's a real 404
-        if image_type == "original":
-             raise HTTPException(status_code=404, detail="Original image missing on disk")
-        # If it's translated and missing, raise 404 so the router can catch and fallback
-        raise HTTPException(status_code=404, detail="Translated image not yet generated")
-        
-    return str(target_path)
-
-async def process_job_pipeline(job_id: UUID) -> None:
-    """
-    Background task for the 6-stage pipeline.
-    Creates its own DB session — never use a request-scoped session here.
-    """
-    from app.core.database import AsyncSessionLocal
-    
-    async with AsyncSessionLocal() as db:
-        try:
-            await _run_pipeline(db, job_id)
-        except Exception as e:
-            # Last-resort error catch
-            async with AsyncSessionLocal() as err_db:
-                job = await err_db.get(TranslationJob, job_id)
-                if job and job.status != "failed":
-                    job.status = "failed"
-                    job.error_message = f"Unhandled pipeline error: {e}"
-                    await err_db.commit()
-            raise
-
-
-async def _run_pipeline(db: AsyncSession, job_id: UUID) -> None:
-    job = await db.get(TranslationJob, job_id)
-    if not job:
-        return
-
-    # ── Mark job as processing ──────────────────────────────────────────────
-    job.status = "processing"
-    job.started_at = datetime.now(timezone.utc)
-    await db.commit()
-
-    try:
-        # ── Get image paths ───────────────────────────────────────────────
-        job_dir = file_service.get_upload_dir(job.user_id, job.id)
-        original_dir = job_dir / "original"
-        image_paths = sorted([str(p) for p in original_dir.glob("*") if p.is_file()])
-        
-        # ── Create page records ──────────────────────────────────────────
-        pages = []
-        for page_number, img_path in enumerate(image_paths, start=1):
-            stmt = select(TranslationPage).where(
-                TranslationPage.job_id == job_id,
-                TranslationPage.page_number == page_number
-            )
-            result = await db.execute(stmt)
-            page = result.scalar_one_or_none()
-
-            if not page:
-                page = TranslationPage(
-                    job_id=job_id,
-                    page_number=page_number,
-                    original_path=img_path,
-                    phase_status="pending",
-                    processing_status="processing"
-                )
-                db.add(page)
-            else:
-                page.phase_status = "pending"
-                page.processing_status = "processing"
-                page.error_message = None
-                page.regions_json = None
-                page.translated_path = None
-                page.has_text = False
-                
-            pages.append(page)
-
-        await db.commit()
-        for p in pages:
-            await db.refresh(p)
-
-        # ════════════════════════════════════════════════════════════════════════
-        # PASS 1: Stages 1–3 for ALL pages (detection + crop + OCR via unified API)
-        # ════════════════════════════════════════════════════════════════════════
-        all_page_regions = []
-        
-        for page, img_path in zip(pages, image_paths):
-            try:
-                page.phase_status = "detecting" # We use "detecting" to signal the start of the OCR pipeline
-                await db.commit()
-                
-                with open(img_path, "rb") as f:
-                    img_b64 = base64.b64encode(f.read()).decode("utf-8")
-                
-                # 🚨 CRITICAL ARCHITECTURE FIX: One unified call for Stages 1, 2, and 3
-                regions = await ai_client.ocr_pipeline(img_b64)
-                
-                if not regions:
-                    page.phase_status = "completed"
-                    page.processing_status = "no_text"
-                    page.has_text = False
-                    await db.commit()
-                    all_page_regions.append([])
-                    continue
-                
-                page.phase_status = "ocr" # Signal OCR completion
-                await db.commit()
-                all_page_regions.append(regions)
-                
-            except Exception as e:
-                page.phase_status = "failed"
-                page.processing_status = "failed"
-                page.error_message = f"Stage 1-3 OCR Pipeline error: {e}"
-                await db.commit()
-                all_page_regions.append([])
-
-        # ════════════════════════════════════════════════════════════════════════
-        # HANGOFF PROTOCOL & PASS 2: Stage 5 — Translation for ALL pages
-        # ════════════════════════════════════════════════════════════════════════
-        
-        for page, regions in zip(pages, all_page_regions):
-            if page.phase_status == "failed" or page.processing_status == "no_text":
-                continue
-                
-            try:
-                page.phase_status = "translating"
-                await db.commit()
-                
-                # The Hangoff protocol runs transparently inside this call on the AI server
-                translated_regions = await ai_client.translate_batch(regions)
-                
-                # Update DB with final JSON
-                page.regions_json = json.dumps(translated_regions, ensure_ascii=False)
-                
-                # Serve the original image (Frontend handles the UI rendering now)
-                page.translated_path = str(img_path) 
-                page.has_text = True
-                page.phase_status = "done"
-                page.processing_status = "completed"
-                await db.commit()
-                
-            except Exception as e:
-                page.phase_status = "failed"
-                page.processing_status = "failed"
-                page.error_message = f"Stage 5 Translation error: {e}"
-                await db.commit()
-
-        # ── Mark job complete ────────────────────────────────────────────────────
-        # Only mark job completed if it wasn't marked failed by a catastrophic error
-        if job.status != "failed":
-            job.status = "completed"
-            job.completed_at = datetime.now(timezone.utc)
-            await db.commit()
-
-    except Exception as e:
-        await db.rollback()
-        job.status = "failed"
-        job.error_message = f"Catastrophic pipeline error: {str(e)}"
-        await db.commit()
 </file>
 
 <file path="backend/app/utils/ai_client.py">
@@ -10616,352 +9429,361 @@ export const ControlBar = () => {
 export default ControlBar;
 </file>
 
-<file path="frontend/src/components/translator/OriginalPanel.tsx">
-import { useRef, useEffect, useState } from 'react';
+<file path="frontend/src/components/translator/JobList.tsx">
+import React, { useState } from 'react';
 import { useTranslatorStore } from '@/store/translatorStore';
 import { cn } from '@/lib/utils';
-import { translatorService } from '@/services/translator.service';
+import { FileText, CheckCircle2, AlertCircle, Loader2, Pencil, Trash2 } from 'lucide-react';
 
-// --- NEW: Sub-component to manage individual thumbnail fetching and memory ---
-const ThumbnailImage = ({ jobId, pageNum, isActive }: { jobId: string; pageNum: number; isActive: boolean }) => {
-  const [imgSrc, setImgSrc] = useState<string | null>(null);
-
-  useEffect(() => {
-    let isMounted = true;
-    let objectUrl: string | null = null;
-
-    const fetchImage = async () => {
-      try {
-        // Fetch the blob using our authenticated service (fixes the 404 and 401!)
-        const blob = await translatorService.getPageBlob(jobId, pageNum, 'original');
-        if (isMounted) {
-          objectUrl = URL.createObjectURL(blob);
-          setImgSrc(objectUrl);
-        }
-      } catch (error) {
-        console.error(`Failed to fetch thumbnail for page ${pageNum}:`, error);
-      }
-    };
-
-    fetchImage();
-
-    // Cleanup to prevent memory leaks when thumbnails are unmounted
-    return () => {
-      isMounted = false;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [jobId, pageNum]);
-
-  return (
-    <img 
-      src={imgSrc || undefined} 
-      alt={`Original Page ${pageNum}`} 
-      className={cn(
-        "w-full h-full object-cover transition-opacity",
-        isActive ? "opacity-100" : "opacity-50 group-hover:opacity-80",
-        !imgSrc && "animate-pulse bg-white/5" // Nice loading skeleton effect
-      )}
-      loading="lazy"
-    />
-  );
-};
-
-// --- MAIN COMPONENT ---
-export const OriginalPanel = () => {
-  const { activeJobId, currentPage, totalPages, goToPage } = useTranslatorStore();
-  const activeRef = useRef<HTMLButtonElement>(null);
-
-  // Auto-scroll to keep the active thumbnail in view
-  useEffect(() => {
-    if (activeRef.current) {
-      activeRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }
-  }, [currentPage]);
-
-  // If no job is selected, hide the panel
-  if (!activeJobId) return null;
-
-  // Create an array [1, 2, 3... totalPages] to map over
-  const pages = Array.from({ length: totalPages }, (_, i) => i + 1);
-
-  return (
-    <div className="w-32 flex-shrink-0 bg-surface-950 border-l border-white/5 overflow-y-auto custom-scrollbar flex flex-col p-2 gap-3">
-      {pages.map((pageNum) => {
-        const isActive = pageNum === currentPage;
-
-        return (
-          <button
-            key={pageNum}
-            ref={isActive ? activeRef : null}
-            onClick={() => goToPage(pageNum)}
-            className={cn(
-              "relative group w-full aspect-[2/3] rounded-md overflow-hidden border-2 transition-all shrink-0 bg-surface-900",
-              isActive 
-                ? "border-primary-500 shadow-[0_0_15px_rgba(16,185,129,0.2)]" 
-                : "border-transparent hover:border-white/20"
-            )}
-          >
-            {/* Render our new authenticated thumbnail component */}
-            <ThumbnailImage jobId={activeJobId} pageNum={pageNum} isActive={isActive} />
-            
-            {/* Page Number Badge */}
-            <div className={cn(
-              "absolute bottom-1 right-1 px-1.5 py-0.5 rounded text-[10px] font-bold shadow-md",
-              isActive ? "bg-primary-500 text-white" : "bg-black/80 text-white/80"
-            )}>
-              {pageNum}
-            </div>
-          </button>
-        );
-      })}
-    </div>
-  );
-};
-
-export default OriginalPanel;
-</file>
-
-<file path="frontend/src/components/translator/PageViewer.tsx">
-import React, { useState, useEffect, useCallback } from 'react';
-import { ZoomIn, ZoomOut, Image as ImageIcon, Loader2, MessageCircle, Type } from 'lucide-react';
-import { useTranslatorStore } from '@/store/translatorStore';
-import { cn } from '@/lib/utils';
-import { usePhaseStream } from '@/hooks/usePhaseStream';
-import BubbleDotOverlay from './BubbleDotOverlay';
-import { CanvasOverlay } from './CanvasOverlay';
-import PhaseProgress from './PhaseProgress';
-import { translatorService } from '@/services/translator.service';
-
-export const PageViewer = () => {
-  const { 
-    activeJobId, 
-    currentPage, 
-    totalPages,
-    nextPage, 
-    prevPage,
-    overlayMode,      // 'dots' | 'text' | 'original'
-    setOverlayMode    // Action to change mode
-  } = useTranslatorStore();
-
-  const { phases, regions, isDone, isFailed } = usePhaseStream(activeJobId, currentPage);
+// --- Native Date Helper (No external library needed) ---
+function timeAgo(dateString: string) {
+  if (!dateString) return '';
+  const date = new Date(dateString);
+  const now = new Date();
+  const seconds = Math.floor((now.getTime() - date.getTime()) / 1000);
   
-  const [imgNaturalW, setImgNaturalW] = useState(0);
-  const [imgNaturalH, setImgNaturalH] = useState(0);
-  const [isLoading, setIsLoading] = useState(true);
-  const [zoom, setZoom] = useState(1);
-  
-  const [authenticatedImageUrl, setAuthenticatedImageUrl] = useState<string | null>(null);
+  if (seconds < 60) return 'just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
 
-  // Fetch Image (Always fetches 'original' now, since overlays handle the translation)
-  useEffect(() => {
-    if (!activeJobId) return;
+const JobItem = ({ job, isActive, onClick, onRename, onDelete }: any) => {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editValue, setEditValue] = useState(job.original_filename);
 
-    let isMounted = true;
-    let objectUrl: string | null = null;
-
-    const fetchImage = async () => {
-      setIsLoading(true);
-      try {
-        // Always fetch original, overlays sit on top
-        const blob = await translatorService.getPageBlob(activeJobId, currentPage, 'original');
-        if (isMounted) {
-          objectUrl = URL.createObjectURL(blob);
-          setAuthenticatedImageUrl(objectUrl);
-        }
-      } catch (error) {
-        console.error("Failed to fetch authenticated image:", error);
-      }
-    };
-
-    fetchImage();
-
-    return () => {
-      isMounted = false;
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl);
-      }
-      setAuthenticatedImageUrl(null);
-    };
-  }, [currentPage, activeJobId]);
-
-  // Reset zoom on page change
-  useEffect(() => {
-    setZoom(1);
-    setImgNaturalW(0);
-    setImgNaturalH(0);
-  }, [currentPage, activeJobId]);
-
-  // Keyboard navigation
-  const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    if (e.key === 'ArrowRight') nextPage();
-    if (e.key === 'ArrowLeft') prevPage();
-  }, [nextPage, prevPage]);
-
-  useEffect(() => {
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleKeyDown]);
-
-  // Zoom Handler
-  const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-    if (e.ctrlKey || e.metaKey) {
-      e.preventDefault();
-      const zoomFactor = e.deltaY > 0 ? -0.1 : 0.1;
-      setZoom((prev) => Math.min(Math.max(0.1, prev + zoomFactor), 2.0)); 
+  const handleSave = (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (editValue.trim()) {
+      onRename(job.id, editValue.trim());
+      setIsEditing(false);
     }
   };
 
-  if (!activeJobId) {
-    return (
-      <div className="flex-1 flex items-center justify-center border border-white/5 rounded-xl bg-surface-900/30 text-white/20">
-        <ImageIcon size={48} className="opacity-20" />
+  return (
+    <div
+      onClick={(e) => {
+        if (!isEditing) onClick();
+      }}
+      className={cn(
+        "group flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-all border",
+        isActive 
+          ? "bg-primary-500/10 border-primary-500/50" 
+          : "bg-surface-900 border-white/5 hover:bg-white/5 hover:border-white/10"
+      )}
+    >
+      {/* Icon Status */}
+      <div className={cn("shrink-0", isActive ? "text-primary-400" : "text-white/40")}>
+        {job.status === 'processing' ? <Loader2 size={18} className="animate-spin text-blue-400" /> :
+         job.status === 'completed' ? <CheckCircle2 size={18} className="text-green-400" /> :
+         job.status === 'failed' ? <AlertCircle size={18} className="text-red-400" /> :
+         <FileText size={18} />}
       </div>
-    );
-  }
+
+      {/* Content */}
+      <div className="flex-1 min-w-0">
+        {isEditing ? (
+          <form onSubmit={handleSave} className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
+            <input
+              autoFocus
+              type="text"
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              className="w-full bg-surface-950 border border-primary-500/50 rounded px-1.5 py-0.5 text-xs text-white outline-none"
+              onBlur={() => handleSave()}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  setEditValue(job.original_filename);
+                  setIsEditing(false);
+                }
+              }}
+            />
+          </form>
+        ) : (
+          <div className="flex flex-col">
+            <span className={cn("text-xs font-medium truncate", isActive ? "text-white" : "text-white/70 group-hover:text-white")}>
+              {job.original_filename}
+            </span>
+            <span className="text-[10px] text-white/30 truncate">
+               {timeAgo(job.created_at)}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Actions (Visible on Hover) */}
+      {!isEditing && (
+        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button 
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsEditing(true);
+            }}
+            className="p-1.5 text-white/40 hover:text-white hover:bg-white/10 rounded transition-colors"
+            title="Rename"
+          >
+            <Pencil size={12} />
+          </button>
+          <button 
+            onClick={(e) => {
+              e.stopPropagation();
+              if (confirm('Are you sure you want to delete this job?')) onDelete(job.id);
+            }}
+            className="p-1.5 text-white/40 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
+            title="Delete"
+          >
+            <Trash2 size={12} />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export const JobList = () => {
+  const { jobs, activeJobId, selectJob, renameJob, deleteJob } = useTranslatorStore();
 
   return (
-    <div className="flex flex-row h-full bg-surface-900 rounded-xl border border-white/5 overflow-hidden relative">
-      
-      {/* LEFT SIDEBAR CONTROLS */}
-      <div className="w-16 flex-shrink-0 bg-surface-950/80 backdrop-blur border-r border-white/10 shadow-xl flex flex-col items-center py-4 gap-6 z-10">
-        
-        {/* Zoom Controls */}
-        <div className="flex flex-col items-center gap-2">
-          <button 
-            onClick={() => setZoom(z => Math.min(2.0, z + 0.1))} 
-            className="p-2 hover:bg-white/10 rounded-lg text-white/60 hover:text-white transition-colors"
-            title="Zoom In"
-          >
-            <ZoomIn size={18} />
-          </button>
-          
-          <span className="text-[10px] font-mono text-white/60 select-none">
-            {Math.round(zoom * 100)}%
+    <div className="flex flex-col gap-2">
+      {jobs.map((job) => (
+        <JobItem
+          key={job.id}
+          job={job}
+          isActive={activeJobId === job.id}
+          onClick={() => selectJob(job.id)}
+          onRename={renameJob}
+          onDelete={deleteJob}
+        />
+      ))}
+    </div>
+  );
+};
+
+export default JobList;
+</file>
+
+<file path="frontend/src/components/translator/TranslationProgress.tsx">
+import { useState, useEffect } from 'react';
+import { useTranslatorStore } from '@/store/translatorStore';
+import { Loader2 } from 'lucide-react';
+
+export const TranslationProgress = () => {
+  // Destructure totalPages directly from the store
+  const { activeJobId, jobs, totalPages } = useTranslatorStore();
+  const [mountTime] = useState(Date.now());
+  const [eta, setEta] = useState<string>('Calculating...');
+
+  // Extract the active job
+  const activeJob = jobs.find((j) => j.id === activeJobId);
+
+  // Cast to any to safely extract completed_pages without modifying your service interfaces
+  const completedPages = (activeJob as any)?.completed_pages || (activeJob as any)?.completedPages || 0;
+  const isProcessing = activeJob?.status === 'processing';
+
+  // Calculate ETA based on elapsed time and pages processed
+  useEffect(() => {
+    if (!isProcessing || completedPages === 0) {
+      setEta('Calculating...');
+      return;
+    }
+
+    const elapsedMs = Date.now() - mountTime;
+    const msPerPage = elapsedMs / completedPages;
+    const pagesRemaining = Math.max(0, totalPages - completedPages);
+    const msRemaining = msPerPage * pagesRemaining;
+
+    const remainingSeconds = Math.ceil(msRemaining / 1000);
+
+    if (remainingSeconds < 60) {
+      setEta(`${remainingSeconds}s remaining`);
+    } else {
+      const minutes = Math.floor(remainingSeconds / 60);
+      const seconds = remainingSeconds % 60;
+      setEta(`${minutes}m ${seconds}s remaining`);
+    }
+  }, [completedPages, totalPages, isProcessing, mountTime]);
+
+  if (!isProcessing) return null;
+
+  const progressPercent = Math.min(((completedPages / Math.max(1, totalPages)) * 100), 100);
+
+  return (
+    <div className="w-full max-w-xl mx-auto mt-6 p-4 rounded-xl bg-surface-900/50 border border-primary-500/20 shadow-[0_0_30px_rgba(16,185,129,0.05)] animate-in fade-in slide-in-from-bottom-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2 text-primary-400">
+          <Loader2 size={18} className="animate-spin" />
+          <span className="text-sm font-semibold animate-pulse">
+            Translating page {Math.min(Math.max(1, completedPages + 1), totalPages)} of {totalPages}...
           </span>
-          
-          <button 
-            onClick={() => setZoom(z => Math.max(0.1, z - 0.1))} 
-            className="p-2 hover:bg-white/10 rounded-lg text-white/60 hover:text-white transition-colors"
-            title="Zoom Out"
-          >
-            <ZoomOut size={18} />
-          </button>
         </div>
-
-        <div className="w-8 h-px bg-white/10" />
-
-        {/* Page Info */}
-        <div className="flex flex-col items-center gap-1 select-none">
-          <span className="text-[9px] font-bold text-white/40 tracking-wider">PAGE</span>
-          <span className="text-xs font-mono text-white/80">{currentPage}/{totalPages}</span>
-        </div>
-
-        <div className="w-8 h-px bg-white/10" />
-
-        {/* NEW: Mode Toggles */}
-        <div className="flex flex-col gap-3 w-full px-2">
-          
-          {/* Button 1: DOTS Mode */}
-          <button 
-            onClick={() => setOverlayMode(overlayMode === 'dots' ? 'original' : 'dots')}
-            className={cn(
-              "flex flex-col items-center gap-1 p-2 rounded-lg transition-all duration-200 group",
-              overlayMode === 'dots'
-                ? "bg-green-500/20 text-green-400 ring-1 ring-green-500/50" 
-                : "text-white/40 hover:text-white hover:bg-white/10"
-            )}
-            title="Show Interactive Dots"
-          >
-            <MessageCircle size={20} className={cn(overlayMode === 'dots' && "fill-green-500/20")} />
-            <span className="text-[9px] font-bold uppercase tracking-wider">Dots</span>
-          </button>
-
-          {/* Button 2: TEXT Mode */}
-          <button 
-            onClick={() => setOverlayMode(overlayMode === 'text' ? 'original' : 'text')}
-            className={cn(
-              "flex flex-col items-center gap-1 p-2 rounded-lg transition-all duration-200 group",
-              overlayMode === 'text'
-                ? "bg-blue-500/20 text-blue-400 ring-1 ring-blue-500/50" 
-                : "text-white/40 hover:text-white hover:bg-white/10"
-            )}
-            title="Show Translated Text"
-          >
-            <Type size={20} />
-            <span className="text-[9px] font-bold uppercase tracking-wider">Text</span>
-          </button>
-
-        </div>
+        <span className="text-xs font-medium text-white/50 font-mono">
+          {eta}
+        </span>
       </div>
 
-      {/* IMAGE VIEWING AREA */}
-      <div 
-        className="flex-1 overflow-auto custom-scrollbar relative flex items-center justify-center bg-surface-950/50"
-        onWheel={handleWheel}
-      >
-        {isLoading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-surface-900/50 z-0">
-            <Loader2 size={32} className="animate-spin text-primary-500 opacity-50" />
-          </div>
-        )}
-
-        {/* Phase Progress Indicator */}
-        {!isDone && !isFailed && (
-          <div className="absolute top-6 left-6 z-30">
-            <PhaseProgress phases={phases} />
-          </div>
-        )}
-        
-        {authenticatedImageUrl && (
-          <div 
-            className="relative transition-transform duration-200 ease-out origin-center"
-            style={{ 
-              transform: `scale(${zoom})`,
-              display: isLoading ? 'none' : 'inline-block',
-              width: 'max-content'
-            }}
-          >
-            <img
-              src={authenticatedImageUrl}
-              alt={`Page ${currentPage}`}
-              onLoad={(e) => {
-                setIsLoading(false);
-                setImgNaturalW((e.target as HTMLImageElement).naturalWidth);
-                setImgNaturalH((e.target as HTMLImageElement).naturalHeight);
-              }}
-              onError={() => setIsLoading(false)}
-              className="block max-w-full h-auto select-none" 
-            />
-
-            {/* CONDITIONAL OVERLAYS */}
-            
-            {/* Mode: DOTS */}
-            {overlayMode === 'dots' && (
-              <BubbleDotOverlay
-                regions={regions as any}
-                imageWidth={imgNaturalW}
-                imageHeight={imgNaturalH}
-                visible={true}
-              />
-            )}
-
-            {/* Mode: TEXT */}
-            {overlayMode === 'text' && (
-              <CanvasOverlay
-                regions={regions as any}
-                imageWidth={imgNaturalW}
-                imageHeight={imgNaturalH}
-                visible={true}
-              />
-            )}
-          </div>
-        )}
+      <div className="h-2 w-full bg-surface-950 rounded-full overflow-hidden border border-white/5">
+        <div 
+          className="h-full bg-gradient-to-r from-primary-600 to-primary-400 rounded-full transition-all duration-500 ease-out relative"
+          style={{ width: `${progressPercent}%` }}
+        >
+          <div className="absolute inset-0 bg-white/20 w-full animate-[shimmer_2s_infinite] -skew-x-12 translate-x-[-100%]" />
+        </div>
       </div>
     </div>
   );
 };
 
-export default PageViewer;
+export default TranslationProgress;
+</file>
+
+<file path="frontend/src/hooks/usePageStream.ts">
+import { useState, useEffect, useRef } from 'react'
+import { useAuthStore } from '@/store/authStore'
+import { useTranslatorStore } from '@/store/translatorStore'
+import type { PhaseEvent, PhaseState, PipelineRegion } from '@/types/translator.types'
+
+interface UsePhaseStreamResult {
+  phases: PhaseState[]
+  regions: PipelineRegion[]
+  isDone: boolean
+  isFailed: boolean
+  errorMsg: string | null
+}
+
+const STAGE_NAMES = [
+  '',
+  'Detecting text regions',
+  'Cropping bubbles',
+  'Reading Japanese text',
+  'Hangoff Protocol - loading Qwen 35B',
+  'Translating with Qwen 35B',
+  'Complete',
+]
+
+function initialPhases(): PhaseState[] {
+  return STAGE_NAMES.slice(1).map((name, i) => ({
+    stage: i + 1,
+    name,
+    status: 'waiting' as const,
+  }))
+}
+
+export function usePhaseStream(
+  jobId: string | null,
+  pageNumber: number,
+): UsePhaseStreamResult {
+  const [phases, setPhases] = useState<PhaseState[]>(initialPhases())
+  const [regions, setRegions] = useState<PipelineRegion[]>([])
+  const [isDone, setIsDone] = useState(false)
+  const [isFailed, setIsFailed] = useState(false)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
+
+  const readerRef = useRef<ReadableStreamDefaultReader | null>(null)
+  
+  const cachedRegions = useTranslatorStore(s => jobId ? s.pageRegions[pageNumber] : undefined)
+  const token = useAuthStore(s => s.token)
+  const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+
+  useEffect(() => {
+    if (cachedRegions && cachedRegions.length > 0) {
+      setRegions(cachedRegions as unknown as PipelineRegion[])
+      setPhases(initialPhases().map(p => ({ ...p, status: 'done' })))
+      setIsDone(true)
+    }
+  }, [cachedRegions])
+
+  useEffect(() => {
+    if (!jobId || (cachedRegions && cachedRegions.length > 0)) return
+
+    setPhases(initialPhases())
+    setRegions([])
+    setIsDone(false)
+    setIsFailed(false)
+    setErrorMsg(null)
+
+    let cancelled = false
+
+    const connect = async () => {
+      // THE FIX: Ensure we have a token before connecting
+      if (!token) return;
+
+      try {
+        const response = await fetch(
+          `${baseUrl}/api/v1/translate/jobs/${jobId}/pages/${pageNumber}/pipeline-progress`,
+          {
+            headers: {
+              // THE FIX: Add Authorization header to stop 401 errors
+              Authorization: `Bearer ${token}`,
+              'Cache-Control': 'no-cache',
+            }
+          }
+        )
+
+        if (!response.ok || !response.body) return
+
+        const reader = response.body.getReader()
+        readerRef.current = reader
+        const decoder = new TextDecoder()
+        let buffer = ''
+
+        while (!cancelled) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          buffer = lines.pop() ?? ''
+
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue
+            try {
+              const event = JSON.parse(line.slice(6)) as PhaseEvent
+              if ('waiting' in event) continue
+              if ('stage' in event) {
+                if (event.stage === 6 && event.status === 'done') {
+                  const stage6Event = event as { stage: 6; regions: PipelineRegion[] }
+                  setRegions(stage6Event.regions)
+                  setPhases(initialPhases().map(p => ({ ...p, status: 'done' })))
+                  setIsDone(true)
+                  reader.cancel()
+                  return
+                }
+                if (event.stage === 0 && event.status === 'failed') {
+                  const failedEvent = event as { stage: 0; error: string }
+                  setIsFailed(true)
+                  setErrorMsg(failedEvent.error)
+                  reader.cancel()
+                  return
+                }
+                let detailText: string | undefined = undefined
+                if ('region_count' in event && event.region_count !== undefined) {
+                  detailText = `${event.region_count} bubbles`
+                } else if ('done' in event && 'total' in event) {
+                  detailText = `${event.done}/${event.total} bubbles`
+                }
+                setPhases(prev => prev.map(p =>
+                  p.stage === event.stage
+                    ? { ...p, status: event.status === 'running' ? 'running' : 'done', detail: detailText }
+                    : p
+                ))
+              }
+            } catch { }
+          }
+        }
+      } catch { }
+    }
+    connect()
+    return () => {
+      cancelled = true
+      readerRef.current?.cancel()
+    }
+  }, [jobId, pageNumber, token, baseUrl, cachedRegions])
+
+  return { phases, regions, isDone, isFailed, errorMsg }
+}
 </file>
 
 <file path="frontend/src/layouts/AuthLayout.tsx">
@@ -12201,86 +11023,6 @@ export interface ModelInfo {
 }
 </file>
 
-<file path="frontend/src/types/translator.types.ts">
-export type JobStatus = 'pending' | 'processing' | 'completed' | 'failed'
-export type PageStatus = 'pending' | 'processing' | 'done' | 'no_text' | 'failed'
-
-// NEW: The 3-way toggle state
-export type OverlayMode = 'dots' | 'text' | 'original'
-
-export interface TranslationJob {
-  id: string
-  original_filename: string
-  status: JobStatus
-  source_language: string
-  target_language: string
-  page_count: number
-  error_message: string | null
-  created_at: string
-  completed_at: string | null
-  engine?: 'pipeline' | 'ocr_llm'
-}
-
-export interface TranslationRegion {
-  index: number
-  bbox: [number, number, number, number]  // [x1, y1, x2, y2] pixel coords
-  original: string
-  translated: string
-  center?: [number, number];
-  type: 'dialogue' | 'sfx' | 'narration' | 'title'
-}
-
-export type RegionType = TranslationRegion['type']
-
-// A single translated bubble region (Pipeline)
-export interface PipelineRegion {
-  index: number
-  bbox: [number, number, number, number]  // [x1, y1, x2, y2] original image px
-  japanese: string
-  english: string
-}
-
-export interface TranslationPage {
-  id: string
-  job_id: string
-  page_number: number
-  has_text: boolean
-  processing_status: PageStatus
-  error_message: string | null
-  // Union type preserves legacy fallback while supporting the new pipeline
-  regions: TranslationRegion[] | PipelineRegion[] | null
-  phase_status?: 'pending' | 'detecting' | 'cropping' | 'ocr' | 'translating' | 'done' | 'failed'
-}
-
-export interface TranslationJobDetail extends TranslationJob {
-  pages: TranslationPage[]
-}
-
-// Stage status for the PhaseProgress UI component
-export type PhaseStatus = 'waiting' | 'running' | 'done' | 'failed'
-
-export interface PhaseState {
-  stage: number      // 1-6
-  name: string
-  status: PhaseStatus
-  detail?: string    // e.g. "8/12 bubbles" for Stage 3
-}
-
-// Union type for all possible SSE events from /stream endpoint (Legacy)
-export type RegionStreamEvent =
-  | (TranslationRegion & { index: number })         // a region arriving
-  | { done: true; total_regions: number; page_number: number }  // stream complete
-  | { waiting: true }                                // page still processing
-  | { error: string; done: true }                    // page failed
-
-// Union type for SSE events from /pipeline-progress (New Pipeline)
-export type PhaseEvent =
-  | { stage: 1 | 2 | 3 | 4 | 5; name: string; status: 'running' | 'done'; region_count?: number; done?: number; total?: number }
-  | { stage: 6; name: 'Complete'; status: 'done'; regions: PipelineRegion[] }
-  | { stage: 0; name: 'Failed'; status: 'failed'; error: string }
-  | { waiting: true }
-</file>
-
 <file path="ai_server/app/routers/models.py">
 from pathlib import Path
 from fastapi import APIRouter, BackgroundTasks
@@ -12346,6 +11088,883 @@ async def prewarm_vision_model(background_tasks: BackgroundTasks):
         return {"status": "warming_up", "model": settings.VISION_MODEL}
         
     return {"status": "already_hot"}
+</file>
+
+<file path="backend/app/routers/translator.py">
+import asyncio
+import aiofiles
+import json
+from pathlib import Path
+from typing import List, Optional
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, BackgroundTasks, Request
+from fastapi.responses import FileResponse, StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from pydantic import BaseModel  # <--- Added for request body validation
+
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+from app.core.config import settings
+from app.core.database import get_db, AsyncSessionLocal
+from app.dependencies.auth import get_current_user
+from app.models.user import User
+from app.models.translator import TranslationJob, TranslationPage
+from app.schemas.translator import JobResponse, JobDetailResponse
+from app.services import translator_service
+
+router = APIRouter()
+limiter = Limiter(key_func=get_remote_address)
+
+# Magic bytes definitions for strict file validation
+MAGIC_BYTES = {
+    "jpg": b"\xff\xd8\xff",
+    "png": b"\x89\x50\x4e\x47",
+    "zip_pk": b"\x50\x4b",  # Also covers .cbz files
+}
+
+# --- NEW MODEL FOR RENAME ---
+class RenameRequest(BaseModel):
+    name: str
+
+@router.post("/upload", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
+@limiter.limit("5/minute")
+async def upload_file(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    source_language: Optional[str] = Form(None), 
+    target_language: Optional[str] = Form(None), 
+    engine: Optional[str] = Form(None),          
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    source_language = source_language or "auto"
+    target_language = target_language or "en"
+    
+    valid_engines = {"pipeline", "vision", "ocr_llm"}
+    if not engine or engine not in valid_engines:
+        engine = "pipeline"
+
+    max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+    if file.size and file.size > max_bytes:
+        raise HTTPException(status_code=413, detail=f"File too large.")
+
+    header = await file.read(4)
+    await file.seek(0)
+    
+    is_valid_type = (
+        header.startswith(MAGIC_BYTES["jpg"]) or 
+        header.startswith(MAGIC_BYTES["png"]) or 
+        header.startswith(MAGIC_BYTES["zip_pk"])
+    )
+    
+    if not is_valid_type:
+        raise HTTPException(status_code=415, detail="Invalid file type.")
+
+    job = await translator_service.create_translation_job(
+        db=db, 
+        user_id=current_user.id, 
+        filename=file.filename,
+        file_size=file.size,
+        source_lang=source_language,
+        target_lang=target_language
+    )
+
+    original_dir = Path(settings.UPLOAD_DIR) / str(current_user.id) / str(job.id) / "original"
+    original_dir.mkdir(parents=True, exist_ok=True)
+    file_path = original_dir / file.filename
+
+    async with aiofiles.open(file_path, "wb") as out_file:
+        while content := await file.read(1024 * 1024):
+            await out_file.write(content)
+
+    job = await translator_service.update_job_file_path(db, job.id, str(file_path))
+    job.engine = engine
+    await db.commit()
+
+    if engine == "ocr_llm":
+        background_tasks.add_task(translator_service.process_job, job.id, db)
+    elif engine == "vision":
+        background_tasks.add_task(translator_service.process_job_vision, job.id)
+    else:
+        background_tasks.add_task(translator_service.process_job_pipeline, job.id)
+
+    return job
+
+@router.get("/jobs", response_model=List[JobResponse])
+async def list_jobs(
+    skip: int = 0,
+    limit: int = 50,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    return await translator_service.get_user_jobs(db, current_user.id, skip, limit)
+
+@router.get("/jobs/{job_id}", response_model=JobDetailResponse)
+async def get_job_detail(
+    job_id: UUID,  
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    return await translator_service.get_job_detail(db, current_user.id, job_id)
+
+# --- NEW RENAME ENDPOINT ---
+@router.patch("/jobs/{job_id}/rename", response_model=JobResponse)
+async def rename_job(
+    job_id: UUID,
+    request: RenameRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    job = await db.get(TranslationJob, job_id)
+    if not job or job.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    job.original_filename = request.name
+    await db.commit()
+    await db.refresh(job)
+    return job
+
+@router.get("/jobs/{job_id}/pages/{page_number}/pipeline-progress")
+async def pipeline_progress(
+    job_id: UUID,
+    page_number: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    # Verify job ownership once
+    job = await db.get(TranslationJob, job_id)
+    if not job or job.user_id != current_user.id:
+        raise HTTPException(404, "Job not found")
+
+    PHASE_NAMES = {
+        "detecting":   (1, "Detecting text regions"),
+        "cropping":    (2, "Cropping bubbles"),
+        "ocr":         (3, "Reading Japanese text"),
+        "translating": (5, "Translating with Qwen 35B"),
+        "done":        (6, "Complete"),
+        "failed":      (0, "Failed"),
+    }
+
+    async def event_generator():
+        last_phase_status = None
+        while True:
+            await asyncio.sleep(2.0)
+            
+            try:
+                async with AsyncSessionLocal() as stream_db:
+                    result = await stream_db.execute(
+                        select(TranslationPage).where(
+                            TranslationPage.job_id == job_id,
+                            TranslationPage.page_number == page_number,
+                        )
+                    )
+                    page = result.scalar_one_or_none()
+
+                if page is None:
+                    yield f"data: {json.dumps({'waiting': True})}\n\n"
+                    continue
+
+                status = page.phase_status
+
+                if status != last_phase_status or last_phase_status is None:
+                    stage_num, stage_name = PHASE_NAMES.get(status, (0, status))
+                    
+                    if status == "done" and page.regions_json:
+                        regions = json.loads(page.regions_json)
+                        yield f"data: {json.dumps({'stage':4,'name':'Hangoff Protocol','status':'done'})}\n\n"
+                        yield f"data: {json.dumps({'stage':5,'name':'Translating','status':'done'})}\n\n"
+                        yield f"data: {json.dumps({'stage':6,'name':'Complete','status':'done','regions':regions})}\n\n"
+                        return
+                    elif status == "failed":
+                        yield f"data: {json.dumps({'stage':0,'name':'Failed','status':'failed','error':page.error_message})}\n\n"
+                        return
+                    else:
+                        yield f"data: {json.dumps({'stage':stage_num,'name':stage_name,'status':'running'})}\n\n"
+                        
+                    last_phase_status = status
+            except Exception as e:
+                print(f"Stream error: {e}")
+                yield f"data: {json.dumps({'waiting': True})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+@router.get("/jobs/{job_id}/pages/{page_number}/stream")
+async def stream_page_regions(
+    job_id: UUID,
+    page_number: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    job = await db.get(TranslationJob, job_id)
+    if not job or job.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    async def event_generator():
+        last_region_count = 0
+        while True:
+            await asyncio.sleep(2.0) 
+            
+            async with AsyncSessionLocal() as stream_db:
+                current_job = await stream_db.get(TranslationJob, job_id)
+                if current_job and current_job.status == "failed":
+                    error_msg = current_job.error_message or "Job processing failed catastrophically."
+                    yield f"data: {json.dumps({'error': error_msg, 'done': True})}\n\n"
+                    return
+
+                result = await stream_db.execute(
+                    select(TranslationPage).where(
+                        TranslationPage.job_id == job_id,
+                        TranslationPage.page_number == page_number,
+                    )
+                )
+                page = result.scalar_one_or_none()
+
+            if page is None:
+                yield f"data: {json.dumps({'waiting': True})}\n\n"
+                continue
+
+            if page.processing_status == "failed":
+                error_msg = page.error_message or "AI processing failed."
+                yield f"data: {json.dumps({'error': error_msg, 'done': True})}\n\n"
+                return
+
+            if page.regions_json is None:
+                yield f"data: {json.dumps({'waiting': True})}\n\n"
+                continue
+
+            regions = json.loads(page.regions_json)
+            for region in regions[last_region_count:]:
+                yield f"data: {json.dumps(region, ensure_ascii=False)}\n\n"
+            
+            last_region_count = len(regions)
+
+            if page.processing_status in ("completed", "no_text"):
+                total = len(regions)
+                yield f"data: {json.dumps({'done': True, 'total_regions': total, 'page_number': page_number})}\n\n"
+                return
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+@router.get("/jobs/{job_id}/pages/{page_number}/regions")
+async def get_page_regions(
+    job_id: UUID,
+    page_number: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    job = await db.get(TranslationJob, job_id)
+    if not job or job.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    stmt = select(TranslationPage).where(
+        TranslationPage.job_id == job_id,
+        TranslationPage.page_number == page_number
+    )
+    result = await db.execute(stmt)
+    page = result.scalar_one_or_none()
+
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+
+    regions = []
+    if page.regions_json:
+        try:
+            regions = json.loads(page.regions_json)
+        except json.JSONDecodeError:
+            pass
+
+    return {
+        "regions": regions,
+        "page_number": page.page_number,
+        "has_text": page.has_text
+    }
+
+@router.post("/jobs/{job_id}/retranslate", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
+async def retranslate_job(
+    job_id: UUID,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    job = await translator_service.reset_job_for_retranslation(db, current_user.id, job_id)
+    
+    if job.engine == "pipeline":
+        background_tasks.add_task(translator_service.process_job_pipeline, job.id)
+    elif job.engine == "vision":
+        background_tasks.add_task(translator_service.process_job_vision, job.id)
+    else:
+        background_tasks.add_task(translator_service.process_job, job.id, db)
+        
+    return job
+
+@router.delete("/jobs/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_job(
+    job_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    await translator_service.delete_translation_job(db, current_user.id, job_id)
+    return None
+
+@router.get("/jobs/{job_id}/pages/{page_num}/original")
+async def get_original_page(
+    job_id: UUID,
+    page_num: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    max_retries = 5
+    for attempt in range(max_retries):
+        try:
+            file_path = await translator_service.get_page_file_path(
+                db=db, user_id=current_user.id, job_id=job_id, page_num=page_num, image_type="original"
+            )
+            return FileResponse(file_path)
+        except HTTPException as e:
+            if e.status_code == 404 and attempt < max_retries - 1:
+                await asyncio.sleep(1)
+                continue
+            raise e
+
+@router.get("/jobs/{job_id}/pages/{page_num}/translated")
+async def get_translated_page(
+    job_id: UUID,
+    page_num: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    max_retries = 5
+    for attempt in range(max_retries):
+        try:
+            file_path = await translator_service.get_page_file_path(
+                db=db, user_id=current_user.id, job_id=job_id, page_num=page_num, image_type="translated"
+            )
+            return FileResponse(file_path)
+        except HTTPException as e:
+            if e.status_code == 404:
+                try:
+                    orig_path = await translator_service.get_page_file_path(
+                        db=db, user_id=current_user.id, job_id=job_id, page_num=page_num, image_type="original"
+                    )
+                    return FileResponse(orig_path)
+                except:
+                    pass
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1)
+                    continue
+            raise e
+
+@router.get("/jobs/{job_id}/download")
+async def download_translated_job(
+    job_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    zip_stream = await translator_service.create_zip_stream(db, current_user.id, job_id)
+    return StreamingResponse(
+        zip_stream,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="translated_{job_id}.zip"'}
+    )
+</file>
+
+<file path="backend/app/services/translator_service.py">
+import base64
+import json
+import shutil
+import traceback
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import AsyncGenerator
+from uuid import UUID
+from fastapi import HTTPException
+from sqlalchemy.orm import selectinload
+from sqlalchemy import desc, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.translator import TranslationJob, TranslationPage
+from app.utils.ai_client import ai_client
+from app.utils.image_utils import resize_image_for_ocr
+from app.utils.zip_utils import create_zip_stream as generate_zip_stream
+from app.services import file_service
+
+# ─── LEGACY VISION PIPELINE ────────────────────────────────────────────────
+
+async def process_job_vision(job_id: UUID) -> None:
+    """
+    Background task for the vision pipeline.
+    IMPORTANT: Creates its own DB session — never use a request-scoped session here.
+    """
+    from app.core.database import AsyncSessionLocal
+    
+    async with AsyncSessionLocal() as db:
+        try:
+            await _run_vision_job(db, job_id)
+        except Exception as e:
+            # Last-resort error catch — update status even if inner function failed
+            async with AsyncSessionLocal() as err_db:
+                job = await err_db.get(TranslationJob, job_id)
+                if job and job.status != "failed":
+                    job.status = "failed"
+                    job.error_message = f"Unhandled error: {e}"
+                    await err_db.commit()
+            raise
+
+async def _run_vision_job(db: AsyncSession, job_id: UUID) -> None:
+    # Step 1: Fetch the job and mark as processing
+    stmt = select(TranslationJob).where(TranslationJob.id == job_id)
+    result = await db.execute(stmt)
+    job = result.scalar_one_or_none()
+    
+    if not job:
+        return
+
+    job.status = "processing"
+    job.started_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    try:
+        # Step 2: Get image paths
+        job_dir = file_service.get_upload_dir(job.user_id, job.id)
+        original_dir = job_dir / "original"
+        image_paths = sorted([str(p) for p in original_dir.glob("*") if p.is_file()])
+
+        # Update page count immediately so frontend pagination is correct
+        job.page_count = len(image_paths)
+        await db.commit()
+
+        # Step 3: Process each page
+        for page_number, img_path in enumerate(image_paths, start=1):
+            
+            # Upsert: Check if the page already exists
+            stmt = select(TranslationPage).where(
+                TranslationPage.job_id == job_id,
+                TranslationPage.page_number == page_number
+            )
+            result = await db.execute(stmt)
+            page = result.scalar_one_or_none()
+
+            if not page:
+                page = TranslationPage(
+                    job_id=job_id,
+                    page_number=page_number,
+                    original_path=img_path,
+                    processing_status="processing",
+                )
+                db.add(page)
+            else:
+                page.processing_status = "processing"
+                page.error_message = None
+                page.regions_json = None
+                page.translated_path = None
+                page.has_text = False
+                
+            await db.commit()
+            await db.refresh(page)
+
+            try:
+                # Encode image to base64
+                with open(img_path, "rb") as f:
+                    image_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+                regions = []
+                async for chunk in ai_client.translate_image_vision_stream(
+                    image_base64=image_b64,
+                    source_language=job.source_language,
+                    target_language=job.target_language,
+                ):
+                    # 1. Parse the clean string generated by aiter_lines()
+                    if isinstance(chunk, dict):
+                        data = chunk
+                    else:
+                        try:
+                            data = json.loads(chunk)
+                        except json.JSONDecodeError:
+                            print(f"Backend Warning: Could not parse chunk: {chunk}")
+                            continue
+
+                    # 2. Handle End of Stream
+                    if data.get("done") is True:
+                        break
+                        
+                    if data.get("error"):
+                        raise RuntimeError(data["error"])
+
+                    # 3. Handle valid regions
+                    if "bbox" in data:
+                        regions.append(data)
+                        
+                        # Live commit so frontend sees progress
+                        page.regions_json = json.dumps(regions, ensure_ascii=False)
+                        page.has_text = True
+                        await db.commit()
+
+                # 5. Guaranteed Save on Success
+                page.translated_path = img_path
+                page.has_text = len(regions) > 0
+                page.processing_status = "completed" if regions else "no_text"
+                await db.commit()
+
+            except Exception as e:
+                # 6. INNER CATCH: Fails a single page and breaks the loop safely
+                await db.rollback() # Clear any hanging transactions
+                
+                page.processing_status = "failed"
+                page.error_message = str(e)
+                await db.commit()
+                
+                job.status = "failed"
+                job.error_message = f"Page {page_number} failed: {str(e)}"
+                await db.commit()
+                
+                print(f"Backend Task Failed on Page {page_number}: {e}")
+                break 
+
+        # Step 4: Mark the entire job as complete (if no pages failed)
+        if job.status != "failed":
+            job.status = "completed"
+            job.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+
+    except Exception as e:
+        # 7. OUTER CATCH: Catastrophic failure
+        await db.rollback()
+        job.status = "failed"
+        job.error_message = f"Unhandled error: {str(e)}"
+        await db.commit()
+        print(f"Backend Task Catastrophic Failure: {e}")
+
+# ─── NEW 6-STAGE PIPELINE ──────────────────────────────────────────────────
+
+async def process_job_pipeline(job_id: UUID) -> None:
+    """
+    Background task for the 6-stage pipeline.
+    Creates its own DB session — never use a request-scoped session here.
+    """
+    from app.core.database import AsyncSessionLocal
+    
+    async with AsyncSessionLocal() as db:
+        try:
+            await _run_pipeline(db, job_id)
+        except Exception as e:
+            # Last-resort error catch
+            print(f"PIPELINE FATAL ERROR: {traceback.format_exc()}")
+            async with AsyncSessionLocal() as err_db:
+                job = await err_db.get(TranslationJob, job_id)
+                if job and job.status != "failed":
+                    job.status = "failed"
+                    job.error_message = f"Unhandled pipeline error: {e}"
+                    await err_db.commit()
+            raise
+
+async def _run_pipeline(db: AsyncSession, job_id: UUID) -> None:
+    job = await db.get(TranslationJob, job_id)
+    if not job:
+        return
+
+    # ── Mark job as processing ──────────────────────────────────────────────
+    print(f"[Pipeline] Starting Job {job_id}")
+    job.status = "processing"
+    job.started_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    try:
+        # ── Get image paths ───────────────────────────────────────────────
+        job_dir = file_service.get_upload_dir(job.user_id, job.id)
+        original_dir = job_dir / "original"
+
+        # ── CBZ extraction ────────────────────────────────────────────────
+        raw_files = list(original_dir.glob("*"))
+        if len(raw_files) == 1 and raw_files[0].suffix.lower() in [".cbz", ".zip"]:
+            from app.services.file_service import extract_cbz
+            extract_cbz(str(raw_files[0]), str(original_dir))
+
+        # FIX 1: Recursive Search (.rglob) to find nested images in CBZ folders
+        IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+        image_paths = sorted(
+            [str(p) for p in original_dir.rglob("*") if p.suffix.lower() in IMAGE_EXTS],
+            key=lambda s: file_service.natural_sort_key(s),
+        )
+
+        if not image_paths:
+            job.status = "failed"
+            job.error_message = "No image files found after extraction."
+            await db.commit()
+            return
+        
+        # ── Update page count so frontend knows total pages immediately ───
+        job.page_count = len(image_paths)
+        print(f"[Pipeline] Found {len(image_paths)} pages")
+        await db.commit()
+
+        # ── Create page records (1-based index) ──────────────────────────
+        pages_to_process = []
+        for i, img_path in enumerate(image_paths):
+            page_num = i + 1  # Strict 1-based indexing
+            
+            stmt = select(TranslationPage).where(
+                TranslationPage.job_id == job_id,
+                TranslationPage.page_number == page_num
+            )
+            result = await db.execute(stmt)
+            page = result.scalar_one_or_none()
+
+            if not page:
+                page = TranslationPage(
+                    job_id=job_id,
+                    page_number=page_num,
+                    original_path=img_path,
+                    phase_status="pending",
+                    processing_status="processing"
+                )
+                db.add(page)
+            else:
+                # Reset existing page
+                page.phase_status = "pending"
+                page.processing_status = "processing"
+                page.error_message = None
+                page.regions_json = None
+                page.translated_path = None
+                
+            pages_to_process.append(page)
+
+        await db.commit()
+        for p in pages_to_process:
+            await db.refresh(p)
+
+        # ════════════════════════════════════════════════════════════════════════
+        # PASS 1: Detection + OCR (Stages 1-3)
+        # ════════════════════════════════════════════════════════════════════════
+        ocr_results = {} # page_num -> regions
+
+        for page in pages_to_process:
+            try:
+                print(f"[Pipeline] OCR Stage for Page {page.page_number}")
+                page.phase_status = "detecting"
+                await db.commit()
+                
+                with open(page.original_path, "rb") as f:
+                    img_b64 = base64.b64encode(f.read()).decode("utf-8")
+                
+                regions = await ai_client.ocr_pipeline(img_b64)
+                
+                if not regions:
+                    print(f"[Pipeline] Page {page.page_number}: No text detected")
+                    page.phase_status = "completed"
+                    page.processing_status = "no_text"
+                    page.has_text = False
+                else:
+                    page.phase_status = "ocr" # Signal OCR completion
+                    ocr_results[page.page_number] = regions
+                
+                await db.commit()
+                
+            except Exception as e:
+                print(f"[Pipeline] OCR Error Page {page.page_number}: {e}")
+                page.phase_status = "failed"
+                page.processing_status = "failed"
+                page.error_message = f"OCR Error: {e}"
+                await db.commit()
+
+        # ════════════════════════════════════════════════════════════════════════
+        # PASS 2: Translation (Stage 5) - WITH RETRY LOGIC
+        # ════════════════════════════════════════════════════════════════════════
+        for page in pages_to_process:
+            # Skip pages that failed step 1 or have no text
+            if page.page_number not in ocr_results:
+                continue
+                
+            regions = ocr_results[page.page_number]
+            
+            # FIX 2: RETRY LOOP for LLM Non-Determinism
+            max_retries = 3
+            success = False
+            
+            for attempt in range(max_retries):
+                try:
+                    if attempt == 0:
+                        print(f"[Pipeline] Translating Page {page.page_number}")
+                    else:
+                        print(f"[Pipeline] Retry {attempt+1}/{max_retries} for Page {page.page_number}")
+                        
+                    page.phase_status = "translating"
+                    await db.commit()
+                    
+                    # Call AI Server
+                    translated_regions = await ai_client.translate_batch(regions)
+                    
+                    page.regions_json = json.dumps(translated_regions, ensure_ascii=False)
+                    page.translated_path = str(page.original_path) 
+                    page.has_text = True
+                    page.phase_status = "done"
+                    page.processing_status = "completed"
+                    await db.commit()
+                    
+                    success = True
+                    break # Success! Exit retry loop
+                    
+                except Exception as e:
+                    print(f"[Pipeline] Attempt {attempt+1} failed for Page {page.page_number}: {e}")
+                    import asyncio
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(2) 
+
+            if not success:
+                page.phase_status = "failed"
+                page.error_message = "Translation failed after 3 attempts"
+                await db.commit()
+
+        # ── Mark job complete ────────────────────────────────────────────────────
+        if job.status != "failed":
+            job.status = "completed"
+            job.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+            print(f"[Pipeline] Job {job_id} Finished")
+
+    except Exception as e:
+        print(f"[Pipeline] CATASTROPHIC JOB FAILURE: {e}")
+        await db.rollback()
+        job.status = "failed"
+        job.error_message = f"Catastrophic pipeline error: {str(e)}"
+        await db.commit()
+
+# ─── CRUD Helper Methods ──────────────────────────────────────────────────
+
+async def create_zip_stream(job_id: UUID, db: AsyncSession) -> AsyncGenerator[bytes, None]:
+    stmt = select(TranslationPage).where(TranslationPage.job_id == job_id).order_by(TranslationPage.page_number)
+    result = await db.execute(stmt)
+    pages = result.scalars().all()
+
+    file_paths = []
+    for page in pages:
+        source_path = page.translated_path or page.original_path
+        if source_path and Path(source_path).exists():
+            name_in_zip = f"page_{page.page_number:03d}{Path(source_path).suffix}"
+            file_paths.append((source_path, name_in_zip))
+
+    async for chunk in generate_zip_stream(file_paths):
+        yield chunk
+
+async def create_translation_job(db: AsyncSession, user_id: UUID, filename: str, file_size: int, source_lang: str, target_lang: str) -> TranslationJob:
+    job = TranslationJob(
+        user_id=user_id, 
+        original_filename=filename, 
+        file_path="", 
+        file_size_bytes=file_size, 
+        source_language=source_lang, 
+        target_language=target_lang
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+    return job
+
+async def update_job_file_path(db: AsyncSession, job_id: UUID, file_path: str) -> TranslationJob:
+    job = await db.get(TranslationJob, job_id)
+    job.file_path = file_path
+    await db.commit()
+    await db.refresh(job)
+    return job
+
+async def get_user_jobs(db: AsyncSession, user_id: UUID, skip: int, limit: int) -> list[TranslationJob]:
+    stmt = select(TranslationJob).where(TranslationJob.user_id == user_id).order_by(desc(TranslationJob.created_at)).offset(skip).limit(limit)
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+async def get_job_detail(db: AsyncSession, user_id: UUID, job_id: str) -> TranslationJob:
+    stmt = select(TranslationJob).where(
+        TranslationJob.id == job_id, 
+        TranslationJob.user_id == user_id
+    ).options(selectinload(TranslationJob.pages))
+    
+    result = await db.execute(stmt)
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+async def reset_job_for_retranslation(db: AsyncSession, user_id: UUID, job_id: UUID) -> TranslationJob:
+    stmt = select(TranslationJob).where(
+        TranslationJob.id == job_id, 
+        TranslationJob.user_id == user_id
+    ).options(selectinload(TranslationJob.pages))
+    
+    result = await db.execute(stmt)
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+        
+    job.status = "pending"
+    job.error_message = None
+    job.completed_at = None
+    
+    for page in job.pages:
+        page.processing_status = "pending"
+        page.phase_status = "pending"
+        page.regions_json = None
+        page.translated_path = None
+        page.error_message = None
+        page.has_text = False
+        page.processing_ms = None
+    
+    await db.commit()
+    await db.refresh(job)
+    return job
+
+async def delete_translation_job(db: AsyncSession, user_id: UUID, job_id: UUID) -> None:
+    stmt = select(TranslationJob).where(TranslationJob.id == job_id, TranslationJob.user_id == user_id)
+    result = await db.execute(stmt)
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+        
+    job_dir = file_service.get_upload_dir(user_id, job.id)
+    if job_dir.exists():
+        shutil.rmtree(job_dir)
+        
+    await db.delete(job)
+    await db.commit()
+
+async def get_page_file_path(db: AsyncSession, user_id: UUID, job_id: UUID, page_num: int, image_type: str) -> str:
+    stmt = select(TranslationPage).join(TranslationJob).where(
+        TranslationJob.user_id == user_id,
+        TranslationPage.job_id == job_id,
+        TranslationPage.page_number == page_num
+    )
+    result = await db.execute(stmt)
+    page = result.scalar_one_or_none()
+    
+    if not page:
+        raise HTTPException(status_code=404, detail=f"Page {page_num} not found")
+        
+    target_path = page.translated_path if image_type == "translated" else page.original_path
+    
+    if not target_path or not Path(target_path).exists():
+        if image_type == "original":
+             raise HTTPException(status_code=404, detail="Original image missing")
+        raise HTTPException(status_code=404, detail="Translated image not generated")
+        
+    return str(target_path)
 </file>
 
 <file path="frontend/src/App.tsx">
@@ -13086,6 +12705,436 @@ export const MusicPlayer = () => {
 export default MusicPlayer;
 </file>
 
+<file path="frontend/src/components/translator/OriginalPanel.tsx">
+import { useEffect, useState } from 'react';
+import { useTranslatorStore } from '@/store/translatorStore';
+import { translatorService } from '@/services/translator.service';
+import { cn } from '@/lib/utils';
+import { Loader2, Image as ImageIcon, Plus } from 'lucide-react';
+
+const Thumbnail = ({ 
+  jobId, 
+  pageNumber, 
+  isActive, 
+  onClick 
+}: { 
+  jobId: string, 
+  pageNumber: number, 
+  isActive: boolean, 
+  onClick: () => void 
+}) => {
+  const [src, setSrc] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      try {
+        const blob = await translatorService.getPageBlob(jobId, pageNumber, 'original');
+        if (active) {
+          const url = URL.createObjectURL(blob);
+          setSrc(url);
+          setLoading(false);
+        }
+      } catch (e) {
+        if (active) setLoading(false);
+      }
+    };
+    load();
+    return () => { active = false; if (src) URL.revokeObjectURL(src); };
+  }, [jobId, pageNumber]);
+
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        "relative w-full aspect-[2/3] overflow-hidden rounded-sm border transition-all focus:outline-none",
+        isActive 
+          ? "border-primary-500 ring-2 ring-primary-500 z-10" 
+          : "border-white/10 hover:border-white/40 hover:brightness-110"
+      )}
+      title={`Jump to page ${pageNumber}`}
+    >
+      {loading ? (
+        <div className="flex h-full w-full items-center justify-center bg-surface-800">
+          <Loader2 className="h-4 w-4 animate-spin text-white/20" />
+        </div>
+      ) : src ? (
+        <img 
+          src={src} 
+          alt={`Page ${pageNumber}`} 
+          className="h-full w-full object-cover"
+          loading="lazy"
+        />
+      ) : (
+        <div className="flex h-full w-full items-center justify-center bg-surface-800">
+          <ImageIcon className="h-5 w-5 text-white/10" />
+        </div>
+      )}
+      
+      <div className={cn(
+        "absolute bottom-0 right-0 px-1 py-0.5 text-[8px] font-mono font-bold rounded-tl-sm leading-none",
+        isActive ? "bg-primary-500 text-black" : "bg-black/60 text-white backdrop-blur-sm"
+      )}>
+        {pageNumber}
+      </div>
+    </button>
+  );
+};
+
+export const OriginalPanel = () => {
+  const { activeJobId, totalPages, currentPage, goToPage, selectJob } = useTranslatorStore();
+
+  if (!activeJobId) return null;
+
+  const pages = Array.from({ length: totalPages }, (_, i) => i + 1);
+
+  // This resets the UI state to show the FileUploader again
+  const handleNewUpload = () => {
+    selectJob(null as any); 
+  };
+
+  return (
+    <div className="flex flex-col h-full w-full bg-surface-950">
+      
+      {/* Header with New Button */}
+      <div className="p-3 border-b border-white/10 bg-surface-950/95 backdrop-blur sticky top-0 z-20 flex justify-between items-center shadow-md">
+        <div className="flex items-center gap-2">
+          <h3 className="text-[14px] font-bold text-white/40 uppercase tracking-wider">
+            Content
+          </h3>
+          <span className="text-[14px] bg-white/5 px-2 py-0.5 rounded-full text-white/40 font-mono">
+            {pages.length}P
+          </span>
+        </div>
+
+        {/* NEW UPLOAD BUTTON */}
+        <button 
+          onClick={handleNewUpload}
+          className="flex items-center gap-1 px-2 py-1 bg-primary-500/10 hover:bg-primary-500/20 text-primary-400 text-[10px] font-bold uppercase tracking-wider rounded border border-primary-500/20 transition-colors"
+          title="Upload a new file"
+        >
+          <Plus size={12} />
+          <span>NEW</span>
+        </button>
+      </div>
+
+      {/* SCROLL AREA */}
+      <div className="flex-1 overflow-y-auto custom-scrollbar p-2">
+        {/* YOUR LAYOUT: Preserved exactly as you wrote it */}
+        <div className="grid grid-cols-3 lg:grid-cols-4 gap-1.5">
+          {pages.map((pageNum) => (
+            <Thumbnail
+              key={`${activeJobId}-${pageNum}`}
+              jobId={activeJobId}
+              pageNumber={pageNum}
+              isActive={currentPage === pageNum}
+              onClick={() => goToPage(pageNum)}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default OriginalPanel;
+</file>
+
+<file path="frontend/src/components/translator/PageViewer.tsx">
+import React, { useState, useEffect, useCallback } from 'react';
+import { 
+  Plus, Minus, 
+  ChevronLeft, ChevronRight, 
+  MessageCircle, Type, Image as ImageIcon, 
+  RefreshCw, Loader2 
+} from 'lucide-react';
+import { useTranslatorStore } from '@/store/translatorStore';
+import { cn } from '@/lib/utils';
+import { usePhaseStream } from '@/hooks/usePhaseStream';
+import BubbleDotOverlay from './BubbleDotOverlay';
+import { CanvasOverlay } from './CanvasOverlay'; 
+import PhaseProgress from './PhaseProgress';
+import { translatorService } from '@/services/translator.service';
+
+export const PageViewer = () => {
+  const { 
+    activeJobId, currentPage, totalPages, nextPage, prevPage,
+    overlayMode, setOverlayMode, pollJobStatus, pageRegions,
+    retranslate
+  } = useTranslatorStore();
+
+  const { phases, regions: streamRegions, isDone: streamDone, isFailed } = usePhaseStream(activeJobId, currentPage);
+  
+  const storeRegions = activeJobId ? pageRegions[currentPage] : [];
+  const regions = (streamRegions?.length > 0 ? streamRegions : storeRegions) || [];
+  
+  const hasRegions = regions.length > 0;
+  const isDone = streamDone || hasRegions;
+
+  const [imgNaturalW, setImgNaturalW] = useState(0);
+  const [imgNaturalH, setImgNaturalH] = useState(0);
+  const [isLoading, setIsLoading] = useState(true);
+  const [zoom, setZoom] = useState(1);
+  const [authenticatedImageUrl, setAuthenticatedImageUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!activeJobId) return;
+    pollJobStatus(activeJobId);
+    const interval = setInterval(() => {
+      const currentJob = useTranslatorStore.getState().jobs.find(j => j.id === activeJobId);
+      if (currentJob?.status !== 'completed' && currentJob?.status !== 'failed') {
+        pollJobStatus(activeJobId);
+      }
+    }, 5000); 
+    return () => clearInterval(interval);
+  }, [activeJobId, pollJobStatus]);
+
+  useEffect(() => {
+    if (!activeJobId) return;
+    let isMounted = true;
+    let objectUrl: string | null = null;
+
+    const fetchImage = async () => {
+      setIsLoading(true);
+      try {
+        const blob = await translatorService.getPageBlob(activeJobId, currentPage, 'original');
+        if (isMounted) {
+          objectUrl = URL.createObjectURL(blob);
+          setAuthenticatedImageUrl(objectUrl);
+        }
+      } catch (error) {
+        console.error("Failed to fetch image", error);
+      }
+    };
+    fetchImage();
+    return () => { isMounted = false; if(objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [currentPage, activeJobId]);
+
+  useEffect(() => {
+    setZoom(1);
+    setImgNaturalW(0);
+    setImgNaturalH(0);
+  }, [currentPage, activeJobId]);
+
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if (e.key === 'ArrowRight') nextPage();
+    if (e.key === 'ArrowLeft') prevPage();
+  }, [nextPage, prevPage]);
+
+  useEffect(() => {
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleKeyDown]);
+
+  const handleWheel = (e: React.WheelEvent) => {
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      setZoom((p) => Math.min(Math.max(0.1, p + (e.deltaY > 0 ? -0.1 : 0.1)), 4.0));
+    }
+  };
+
+  const handleRetranslate = async () => {
+    if (activeJobId && confirm("Are you sure you want to re-translate this job?")) {
+      await retranslate(activeJobId);
+    }
+  };
+
+  if (!activeJobId) {
+    return (
+      // Clean transparent empty state
+      <div className="flex-1 flex items-center justify-center bg-transparent border border-white/5 rounded-xl">
+        <ImageIcon className="text-white/20" size={48} />
+      </div>
+    );
+  }
+
+  const SectionLabel = ({ text }: { text: string }) => (
+    <span className="text-[9px] font-bold text-white/40 uppercase tracking-wider mb-2 select-none">
+      {text}
+    </span>
+  );
+
+  return (
+    // FIX: Fully transparent background. Removed all blur.
+    <div className="flex flex-row h-full bg-transparent rounded-xl border border-white/10 overflow-hidden relative shadow-2xl">
+      
+      {/* --- SIDEBAR --- */}
+      {/* Dark tint (bg-black/60) only, NO BLUR. Ensures buttons are readable. */}
+      <div className="w-24 flex-shrink-0 bg-black/60 border-r border-white/10 flex flex-col items-center py-6 gap-6 z-30 select-none overflow-y-auto custom-scrollbar">
+        
+        {/* 1. SIZE SECTION */}
+        <div className="flex flex-col items-center w-full">
+          <SectionLabel text="Size" />
+          <div className="flex flex-col items-center gap-1 bg-white/5 rounded-lg p-1 w-16 border border-white/5">
+            <button 
+              onClick={() => setZoom(z => Math.min(4.0, z + 0.1))} 
+              className="p-1.5 hover:bg-white/10 rounded-md text-white/60 hover:text-white transition-colors w-full flex justify-center"
+            >
+              <Plus size={16} />
+            </button>
+            <span className="text-[10px] font-mono text-white/80 py-1">{Math.round(zoom * 100)}%</span>
+            <button 
+              onClick={() => setZoom(z => Math.max(0.1, z - 0.1))} 
+              className="p-1.5 hover:bg-white/10 rounded-md text-white/60 hover:text-white transition-colors w-full flex justify-center"
+            >
+              <Minus size={16} />
+            </button>
+          </div>
+        </div>
+
+        {/* 2. PAGE SECTION */}
+        <div className="flex flex-col items-center w-full">
+          <SectionLabel text="Page" />
+          <div className="flex flex-col items-center gap-1 bg-white/5 rounded-lg p-1 w-16 border border-white/5">
+            <button 
+              onClick={prevPage} 
+              disabled={currentPage <= 1}
+              className="p-1.5 hover:bg-white/10 rounded-md text-white/60 hover:text-white disabled:opacity-30 transition-colors w-full flex justify-center"
+            >
+              <ChevronLeft size={16} />
+            </button>
+            <div className="flex flex-col items-center leading-none py-1 gap-0.5">
+              <span className="text-xs font-mono font-bold text-white/90">{currentPage}</span>
+              <div className="h-px w-3 bg-white/20 my-0.5"></div>
+              <span className="text-[9px] font-mono text-white/40">{totalPages}</span>
+            </div>
+            <button 
+              onClick={nextPage} 
+              disabled={currentPage >= totalPages}
+              className="p-1.5 hover:bg-white/10 rounded-md text-white/60 hover:text-white disabled:opacity-30 transition-colors w-full flex justify-center"
+            >
+              <ChevronRight size={16} />
+            </button>
+          </div>
+        </div>
+        
+        {/* 3. STYLE SECTION */}
+        <div className="flex flex-col items-center w-full px-3">
+          <SectionLabel text="Style" />
+          <div className="flex flex-col gap-2 w-full">
+            <button 
+              onClick={() => setOverlayMode('dots')}
+              className={cn(
+                "flex items-center justify-center p-2 rounded-lg transition-all border", 
+                overlayMode === 'dots' 
+                  ? "bg-green-500/20 text-green-400 border-green-500/50 shadow-[0_0_10px_rgba(34,197,94,0.2)]" 
+                  : "bg-transparent border-transparent text-white/40 hover:text-white hover:bg-white/10"
+              )}
+              title="Interactive Dots"
+            >
+              <MessageCircle size={18} className={cn(overlayMode === 'dots' && "fill-green-500/20")} />
+            </button>
+            
+            <button 
+              onClick={() => setOverlayMode('text')}
+              className={cn(
+                "flex items-center justify-center p-2 rounded-lg transition-all border", 
+                overlayMode === 'text' 
+                  ? "bg-blue-500/20 text-blue-400 border-blue-500/50 shadow-[0_0_10px_rgba(59,130,246,0.2)]" 
+                  : "bg-transparent border-transparent text-white/40 hover:text-white hover:bg-white/10"
+              )}
+              title="Translated Text"
+            >
+              <Type size={18} />
+            </button>
+
+            <button 
+              onClick={() => setOverlayMode('original')}
+              className={cn(
+                "flex items-center justify-center p-2 rounded-lg transition-all border", 
+                overlayMode === 'original' 
+                  ? "bg-white/20 text-white border-white/50 shadow-[0_0_10px_rgba(255,255,255,0.1)]" 
+                  : "bg-transparent border-transparent text-white/40 hover:text-white hover:bg-white/10"
+              )}
+              title="Original Image"
+            >
+              <ImageIcon size={18} />
+            </button>
+          </div>
+        </div>
+
+        {/* 4. ACTION SECTION */}
+        <div className="flex flex-col items-center w-full px-3">
+          <SectionLabel text="Action" />
+          <button 
+            onClick={handleRetranslate}
+            className="p-2.5 rounded-xl text-white/40 hover:text-primary-400 hover:bg-primary-500/10 transition-all border border-white/5 hover:border-primary-500/20 w-full flex justify-center"
+            title="Re-translate Job"
+          >
+            <RefreshCw size={18} />
+          </button>
+        </div>
+
+      </div>
+
+      {/* --- IMAGE AREA --- */}
+      <div 
+        className="flex-1 overflow-auto custom-scrollbar relative bg-transparent block" 
+        onWheel={handleWheel}
+      >
+        {isLoading && (
+          <div className="absolute inset-0 flex items-center justify-center z-20">
+            <Loader2 className="animate-spin text-primary-500" size={32} />
+          </div>
+        )}
+        
+        {!isDone && !isFailed && !hasRegions && (
+          <div className="absolute top-6 left-6 z-30">
+            <PhaseProgress phases={phases} />
+          </div>
+        )}
+
+        {authenticatedImageUrl && (
+          <div className="min-h-full min-w-full flex items-center justify-center p-4">
+            <div 
+              className="relative transition-transform duration-150 ease-out origin-center will-change-transform"
+              style={{ 
+                transform: `scale(${zoom})`,
+                display: 'inline-block', 
+                width: 'max-content'
+              }}
+            >
+              <img
+                src={authenticatedImageUrl}
+                alt={`Page ${currentPage}`}
+                onLoad={(e) => {
+                  setIsLoading(false);
+                  setImgNaturalW((e.target as HTMLImageElement).naturalWidth);
+                  setImgNaturalH((e.target as HTMLImageElement).naturalHeight);
+                }}
+                className="block w-auto h-auto max-w-full max-h-[95vh] select-none shadow-2xl rounded-sm" 
+                draggable={false}
+              />
+
+              {overlayMode === 'dots' && (
+                <BubbleDotOverlay
+                  regions={regions as any}
+                  imageWidth={imgNaturalW}
+                  imageHeight={imgNaturalH}
+                  visible={true} 
+                />
+              )}
+              
+              {overlayMode === 'text' && (
+                <CanvasOverlay
+                  regions={regions as any}
+                  imageWidth={imgNaturalW}
+                  imageHeight={imgNaturalH}
+                  visible={true}
+                />
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default PageViewer;
+</file>
+
 <file path="frontend/src/components/ui/ThemeBackground.tsx">
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -13159,72 +13208,6 @@ export const ThemeBackground = () => {
 };
 
 export default ThemeBackground;
-</file>
-
-<file path="frontend/src/index.css">
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=Caveat+Brush&display=swap');
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-@layer base {
-  * {
-    box-sizing: border-box;
-  }
-
-  body {
-    /* Uses custom surface color from our tailwind.config.ts */
-    @apply bg-surface-900 text-white font-sans antialiased;
-    overflow: hidden; /* Prevent double scrollbars; handled by internal layouts */
-  }
-
-  /* Custom thin scrollbar for a cleaner look */
-  ::-webkit-scrollbar {
-    width: 6px;
-  }
-
-  ::-webkit-scrollbar-track {
-    @apply bg-transparent;
-  }
-
-  ::-webkit-scrollbar-thumb {
-    @apply bg-white/20 rounded-full;
-  }
-
-  ::-webkit-scrollbar-thumb:hover {
-    @apply bg-white/40;
-  }
-}
-
-@layer components {
-  /* Glass morphism card — used for main content containers */
-  .glass-card {
-    @apply bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl;
-  }
-
-  /* Glass button — used for secondary actions */
-  .glass-btn {
-    @apply bg-white/10 hover:bg-white/20 border border-white/20 
-            backdrop-blur-sm rounded-xl transition-all duration-200 
-           text-white font-medium px-4 py-2;
-  }
-
-  /* Primary action button — high-contrast primary teal brand color */
-  .btn-primary {
-    @apply bg-primary-600 hover:bg-primary-700 text-white font-semibold 
-           px-6 py-2.5 rounded-xl transition-all duration-200 
-           shadow-lg shadow-primary-900/50 active:scale-95;
-  }
-
-  /* Form input specifically designed for glass backgrounds */
-  .glass-input {
-    @apply bg-white/10 border border-white/20 rounded-xl px-4 py-3 
-           text-white placeholder-white/50 outline-none 
-           focus:border-primary-500 focus:ring-2 focus:ring-primary-500/30 
-           transition-all duration-200 w-full;
-  }
-}
 </file>
 
 <file path="frontend/src/layouts/MainLayout.tsx">
@@ -13437,143 +13420,6 @@ export default function ChatbotPage() {
           </>
         )}
       </AnimatePresence>
-    </div>
-  )
-}
-</file>
-
-<file path="frontend/src/pages/TranslatorPage.tsx">
-import { useEffect } from 'react'
-import { motion } from 'framer-motion'
-import { useTranslatorStore } from '@/store/translatorStore'
-import type { TranslationJob } from '@/store/translatorStore'
-import PageViewer from '@/components/translator/PageViewer'
-import ControlBar from '@/components/translator/ControlBar'
-import ActionBar from '@/components/translator/ActionBar'
-import FileUploader from '@/components/translator/FileUploader'
-import OriginalPanel from '@/components/translator/OriginalPanel'
-import TranslationProgress from '@/components/translator/TranslationProgress'
-import JobList from '@/components/translator/JobList'
-
-export default function TranslatorPage() {
-  const loadJobs      = useTranslatorStore(state => state.loadJobs)
-  const pollJobStatus = useTranslatorStore(state => state.pollJobStatus)
-  const jobs          = useTranslatorStore(state => state.jobs)
-
-  const activeJobId = useTranslatorStore(state => state.activeJobId)
-  const activeJob: TranslationJob | null =
-    activeJobId ? (jobs.find(j => j.id === activeJobId) ?? null) : null
-
-  const sourceLanguage    = useTranslatorStore(state => state.sourceLanguage)
-  const setSourceLanguage = useTranslatorStore(state => state.setSourceLanguage)
-  const targetLanguage    = useTranslatorStore(state => state.targetLanguage)
-  const setTargetLanguage = useTranslatorStore(state => state.setTargetLanguage)
-
-  // Load job history on mount so the JobList panel is populated immediately
-  useEffect(() => { loadJobs() }, [loadJobs])
-
-  // Poll every 2s while a job is actively translating.
-  useEffect(() => {
-    if (!activeJobId || activeJob?.status !== 'processing') return
-    const intervalId = setInterval(() => pollJobStatus(activeJobId), 2000)
-    return () => clearInterval(intervalId)
-  }, [activeJobId, activeJob?.status, pollJobStatus])
-
-  return (
-    <div className="flex flex-row h-full w-full overflow-hidden bg-surface-900">
-
-      {/* Left Column (65%) — Viewer */}
-      <div className="flex-[65] flex flex-col h-full min-w-0 border-r border-white/10 relative">
-
-        {activeJob?.status === 'processing' ? (
-          <div className="flex-1 flex items-center justify-center p-8">
-            <TranslationProgress />
-          </div>
-
-        ) : activeJob ? (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex-1 flex flex-col h-full">
-            
-            {/* THE FIX: Top Bar has been completely removed! */}
-            
-            <div className="flex-1 overflow-hidden bg-black/20 p-4">
-              <PageViewer />
-            </div>
-            
-            {/* THE FIX: Moved ActionBar (Re-translate) down next to ControlBar */}
-            <div className="p-4 shrink-0 bg-white/5 border-t border-white/10 flex items-center justify-between">
-              <ControlBar />
-              <ActionBar />
-            </div>
-            
-          </motion.div>
-
-        ) : (
-          <div className="flex-1 flex items-center justify-center text-white/30 font-display text-center p-8">
-            Upload a file or select a past job to start translating.
-          </div>
-        )}
-      </div>
-
-      {/* Right Column (35%) — Controls */}
-      <div className="flex-[35] flex flex-col h-full min-w-0 bg-white/5 backdrop-blur-md shrink-0">
-
-        {/* Language selectors */}
-        <div className="p-4 border-b border-white/10 shrink-0 space-y-4">
-          <h3 className="text-sm font-semibold text-white/70 uppercase tracking-wider">Translation Settings</h3>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1">
-              <label className="text-xs text-white/50" htmlFor="sourceLanguage">Source</label>
-              <select
-                id="sourceLanguage"
-                value={sourceLanguage}
-                onChange={e => setSourceLanguage(e.target.value)}
-                className="glass-input text-sm py-2 cursor-pointer"
-                disabled={activeJob?.status === 'processing'}
-              >
-                <option value="auto">Auto Detect</option>
-                <option value="ja">Japanese</option>
-                <option value="ko">Korean</option>
-                <option value="zh">Chinese</option>
-              </select>
-            </div>
-            <div className="space-y-1">
-              <label className="text-xs text-white/50" htmlFor="targetLanguage">Target</label>
-              <select
-                id="targetLanguage"
-                value={targetLanguage}
-                onChange={e => setTargetLanguage(e.target.value)}
-                className="glass-input text-sm py-2 cursor-pointer"
-                disabled={activeJob?.status === 'processing'}
-              >
-                <option value="en">English</option>
-                <option value="vi">Vietnamese</option>
-              </select>
-            </div>
-          </div>
-        </div>
-
-        {/* Past Jobs list */}
-        {jobs.length > 0 && (
-          <div className="border-b border-white/10 max-h-48 overflow-y-auto p-4 shrink-0">
-            <h4 className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-2">Past Jobs</h4>
-            <JobList />
-          </div>
-        )}
-
-        {/* Upload or Original panel */}
-        <div className="flex-1 overflow-y-auto p-4">
-          {!activeJob ? (
-            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
-              <FileUploader />
-            </motion.div>
-          ) : (
-            <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="h-full">
-              <h4 className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-3">Original Reference</h4>
-              <OriginalPanel />
-            </motion.div>
-          )}
-        </div>
-      </div>
     </div>
   )
 }
@@ -13799,262 +13645,144 @@ export const useChatStore = create<ChatState>((set, get) => ({
 }))
 </file>
 
-<file path="frontend/src/store/translatorStore.ts">
-import { create } from 'zustand'
-import { translatorService } from '@/services/translator.service'
-import type { TranslationJobDetail } from '@/services/translator.service'
-import type { TranslationJob, TranslationRegion, PipelineRegion, OverlayMode } from '@/types/translator.types'
+<file path="frontend/src/types/translator.types.ts">
+export type JobStatus = 'pending' | 'processing' | 'completed' | 'failed'
+export type PageStatus = 'pending' | 'processing' | 'done' | 'no_text' | 'failed'
+export type OverlayMode = 'dots' | 'text' | 'original'
 
-export type { TranslationJob }
-
-// ─── State Interface ──────────────────────────────────────────────────────────
-
-interface TranslatorState {
-  jobs: TranslationJob[]
-  activeJobId: string | null
-  currentPage: number
-  totalPages: number
-  isUploading: boolean
-  uploadProgress: number        // 0-100
-  sourceLanguage: string
-  targetLanguage: string
-  showOriginal: boolean
-  showOverlay: boolean          // Controls visibility of the overlay container
-  
-  // NEW: 3-way overlay mode (dots | text | original)
-  overlayMode: OverlayMode
-  
-  // Caches regions by page_number
-  pageRegions: Record<number, (TranslationRegion | PipelineRegion)[]>
-
-  // Actions
-  loadJobs: () => Promise<void>
-  uploadFile: (file: File, onProgress?: (pct: number) => void) => Promise<void>
-  selectJob: (id: string) => Promise<void>
-  pollJobStatus: (id: string) => Promise<void>
-  nextPage: () => void
-  prevPage: () => void
-  goToPage: (n: number) => void
-  retranslate: (id: string) => Promise<void>
-  downloadZip: (id: string) => Promise<void>
-  deleteJob: (id: string) => Promise<void>
-  
-  toggleShowOriginal: () => void
-  toggleShowOverlay: () => void
-  setOverlayMode: (mode: OverlayMode) => void  // <--- NEW
-  
-  setSourceLanguage: (lang: string) => void
-  setTargetLanguage: (lang: string) => void
+export interface TranslationJob {
+  id: string
+  original_filename: string
+  status: JobStatus
+  source_language: string
+  target_language: string
+  page_count: number
+  error_message: string | null
+  created_at: string
+  completed_at: string | null
+  engine?: 'pipeline' | 'ocr_llm'
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+export interface TranslationRegion {
+  index: number
+  bbox: [number, number, number, number]
+  original: string
+  translated: string
+  center?: [number, number];
+  type: 'dialogue' | 'sfx' | 'narration' | 'title'
+}
 
-function getTotalPages(job: TranslationJob | TranslationJobDetail): number {
-  if ('pages' in job && Array.isArray(job.pages) && job.pages.length > 0) {
-    return job.pages.length
+// THE FIX: Define this type so the Store accepts it
+export interface PipelineRegion {
+  index: number
+  bbox: [number, number, number, number]
+  japanese: string
+  english: string
+}
+
+export interface TranslationPage {
+  id: string
+  job_id: string
+  page_number: number
+  has_text: boolean
+  processing_status: PageStatus
+  error_message: string | null
+  // THE FIX: Allow both region types
+  regions: TranslationRegion[] | PipelineRegion[] | null
+  phase_status?: 'pending' | 'detecting' | 'cropping' | 'ocr' | 'translating' | 'done' | 'failed'
+  regions_json?: string | null
+}
+
+export interface TranslationJobDetail extends TranslationJob {
+  pages: TranslationPage[]
+}
+
+export type PhaseStatus = 'waiting' | 'running' | 'done' | 'failed'
+
+export interface PhaseState {
+  stage: number
+  name: string
+  status: PhaseStatus
+  detail?: string
+}
+
+export type PhaseEvent =
+  | { stage: 1 | 2 | 3 | 4 | 5; name: string; status: 'running' | 'done'; region_count?: number; done?: number; total?: number }
+  | { stage: 6; name: 'Complete'; status: 'done'; regions: PipelineRegion[] }
+  | { stage: 0; name: 'Failed'; status: 'failed'; error: string }
+  | { waiting: true }
+</file>
+
+<file path="frontend/src/index.css">
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Caveat+Brush&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
   }
-  return job.page_count || 1
-}
 
-function triggerBlobDownload(blob: Blob, filename: string): void {
-  const url  = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = filename
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
-}
-
-// ─── Store ────────────────────────────────────────────────────────────────────
-
-export const useTranslatorStore = create<TranslatorState>((set, get) => ({
-  jobs: [],
-  activeJobId: null,
-  currentPage: 1,
-  totalPages: 1,
-  isUploading: false,
-  uploadProgress: 0,
-  sourceLanguage: 'auto',
-  targetLanguage: 'en',
-  showOriginal: false,
-  showOverlay: true,
-  
-  // NEW: Default to 'dots' mode
-  overlayMode: 'dots',
-  
-  pageRegions: {},
-
-  // ─── Load ──────────────────────────────────────────────────────────────────
-
-  loadJobs: async () => {
-    try {
-      const jobs = await translatorService.getJobs()
-      set({ jobs })
-    } catch (error) {
-      console.error('Failed to load translation jobs:', error)
-    }
-  },
-
-  // ─── Upload ────────────────────────────────────────────────────────────────
-
-  uploadFile: async (file, onProgress) => {
-    // Reset pageRegions and overlayMode for the new job
-    set({ isUploading: true, uploadProgress: 0, pageRegions: {}, overlayMode: 'dots' })
+  body {
+    /* Uses custom surface color from our tailwind.config.ts */
+    background: transparent !important;
+    @apply text-white font-sans antialiased;
     
-    const { sourceLanguage, targetLanguage } = get()
+    margin: 0;
+    padding: 0;
+    height: 100vh;
+    width: 100vw;
+    overflow: hidden;
+  }
 
-    try {
-      const newJob = await translatorService.uploadFile(
-        file,
-        sourceLanguage,
-        targetLanguage,
-        (pct) => {
-          set({ uploadProgress: pct })
-          onProgress?.(pct)
-        },
-      )
+  /* Custom thin scrollbar for a cleaner look */
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
 
-      set(state => ({
-        jobs: [newJob, ...state.jobs],
-        activeJobId: newJob.id,
-        totalPages: getTotalPages(newJob),
-        currentPage: 1,
-        isUploading: false,
-        pageRegions: {},
-        overlayMode: 'dots' // Ensure consistent state
-      }))
-    } catch (error) {
-      set({ isUploading: false })
-      console.error('Upload failed:', error)
-    }
-  },
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
 
-  // ─── Selection ─────────────────────────────────────────────────────────────
+  ::-webkit-scrollbar-thumb {
+    @apply bg-white/20 rounded-full;
+  }
 
-  selectJob: async (id) => {
-    const job = get().jobs.find(j => j.id === id)
-    set({
-      activeJobId: id,
-      currentPage: 1,
-      totalPages: job ? getTotalPages(job) : 1,
-      showOriginal: false,
-      pageRegions: {}, 
-    })
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-white/40;
+  }
+}
 
-    try {
-      const jobDetail = await translatorService.getJob(id)
-      const pageRegions: Record<number, (TranslationRegion | PipelineRegion)[]> = {}
-      
-      for (const page of jobDetail.pages ?? []) {
-        if (page.regions && page.regions.length > 0) {
-          pageRegions[page.page_number] = page.regions
-        }
-      }
-      
-      set({ pageRegions })
-    } catch (error) {
-      console.error('Failed to fetch job details for region caching:', error)
-    }
-  },
+@layer components {
+  /* Glass morphism card — used for main content containers */
+  .glass-card {
+    @apply bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl;
+  }
 
-  // ─── Polling ───────────────────────────────────────────────────────────────
+  /* Glass button — used for secondary actions */
+  .glass-btn {
+    @apply bg-white/10 hover:bg-white/20 border border-white/20 
+            backdrop-blur-sm rounded-xl transition-all duration-200 
+           text-white font-medium px-4 py-2;
+  }
 
-  pollJobStatus: async (id) => {
-    try {
-      const updatedJob: TranslationJobDetail = await translatorService.getJob(id)
-      
-      const newPageRegions = { ...get().pageRegions }
-      for (const page of updatedJob.pages ?? []) {
-        if (page.regions && page.regions.length > 0) {
-          newPageRegions[page.page_number] = page.regions
-        }
-      }
+  /* Primary action button — high-contrast primary teal brand color */
+  .btn-primary {
+    @apply bg-primary-600 hover:bg-primary-700 text-white font-semibold 
+           px-6 py-2.5 rounded-xl transition-all duration-200 
+           shadow-lg shadow-primary-900/50 active:scale-95;
+  }
 
-      set(state => ({
-        jobs: state.jobs.map(j => j.id === id ? updatedJob : j),
-        pageRegions: newPageRegions,
-        ...(state.activeJobId === id && {
-          totalPages: getTotalPages(updatedJob),
-        }),
-      }))
-    } catch (error) {
-      console.error('Polling error:', error)
-    }
-  },
-
-  // ─── Pagination ────────────────────────────────────────────────────────────
-
-  nextPage: () => {
-    const { currentPage, totalPages } = get()
-    if (currentPage < totalPages) set({ currentPage: currentPage + 1 })
-  },
-
-  prevPage: () => {
-    const { currentPage } = get()
-    if (currentPage > 1) set({ currentPage: currentPage - 1 })
-  },
-
-  goToPage: (n) => {
-    const { totalPages } = get()
-    if (n >= 1 && n <= totalPages) set({ currentPage: n })
-  },
-
-  // ─── Actions ───────────────────────────────────────────────────────────────
-
-  retranslate: async (id) => {
-    try {
-      const updatedJob = await translatorService.retranslate(id)
-      set(state => ({
-        jobs: state.jobs.map(j => j.id === id ? updatedJob : j),
-        pageRegions: state.activeJobId === id ? {} : state.pageRegions
-      }))
-      void get().pollJobStatus(id)
-    } catch (error) {
-      console.error('Retranslate request failed:', error)
-    }
-  },
-
-  downloadZip: async (id) => {
-    const job = get().jobs.find(j => j.id === id)
-    const filename = job ? `${job.original_filename.replace(/\.[^/.]+$/, '')}_translated.zip` : 'translated.zip'
-    try {
-      const blob = await translatorService.downloadZip(id)
-      triggerBlobDownload(blob, filename)
-    } catch (error) {
-      console.error('Download failed:', error)
-    }
-  },
-
-  deleteJob: async (id) => {
-    try {
-      await translatorService.deleteJob(id)
-      
-      set(state => {
-        const isActiveJob = state.activeJobId === id;
-        return {
-          jobs: state.jobs.filter(j => j.id !== id),
-          activeJobId: isActiveJob ? null : state.activeJobId,
-          pageRegions: isActiveJob ? {} : state.pageRegions,
-        }
-      })
-    } catch (error) {
-      console.error('Delete failed:', error)
-    }
-  },
-
-  // ─── Toggles ───────────────────────────────────────────────────────────────
-
-  toggleShowOriginal: () => set(state => ({ showOriginal: !state.showOriginal })),
-  toggleShowOverlay: () => set(state => ({ showOverlay: !state.showOverlay })),
-  
-  // NEW: Set exact overlay mode
-  setOverlayMode: (mode) => set({ overlayMode: mode }),
-  
-  setSourceLanguage: (sourceLanguage) => set({ sourceLanguage }),
-  setTargetLanguage: (targetLanguage) => set({ targetLanguage }),
-}))
+  /* Form input specifically designed for glass backgrounds */
+  .glass-input {
+    @apply bg-white/10 border border-white/20 rounded-xl px-4 py-3 
+           text-white placeholder-white/50 outline-none 
+           focus:border-primary-500 focus:ring-2 focus:ring-primary-500/30 
+           transition-all duration-200 w-full;
+  }
+}
 </file>
 
 <file path="frontend/src/pages/HomePage.tsx">
@@ -14255,6 +13983,97 @@ export default function HomePage() {
 }
 </file>
 
+<file path="frontend/src/pages/TranslatorPage.tsx">
+import { useEffect } from 'react'
+import { motion } from 'framer-motion'
+import { useTranslatorStore } from '@/store/translatorStore'
+import type { TranslationJob } from '@/store/translatorStore'
+import PageViewer from '@/components/translator/PageViewer'
+import FileUploader from '@/components/translator/FileUploader'
+import OriginalPanel from '@/components/translator/OriginalPanel'
+import TranslationProgress from '@/components/translator/TranslationProgress'
+import JobList from '@/components/translator/JobList'
+
+export default function TranslatorPage() {
+  const loadJobs      = useTranslatorStore(state => state.loadJobs)
+  const pollJobStatus = useTranslatorStore(state => state.pollJobStatus)
+  const jobs          = useTranslatorStore(state => state.jobs)
+
+  const activeJobId = useTranslatorStore(state => state.activeJobId)
+  const activeJob: TranslationJob | null =
+    activeJobId ? (jobs.find(j => j.id === activeJobId) ?? null) : null
+
+  useEffect(() => { loadJobs() }, [loadJobs])
+
+  useEffect(() => {
+    if (!activeJobId || activeJob?.status !== 'processing') return
+    const intervalId = setInterval(() => pollJobStatus(activeJobId), 2000)
+    return () => clearInterval(intervalId)
+  }, [activeJobId, activeJob?.status, pollJobStatus])
+
+  return (
+    <div className="flex flex-row h-full w-full overflow-hidden bg-transparent">
+
+      {/* Left Column (65%) — Viewer */}
+      <div className="flex-[65] flex flex-col h-full min-w-0 relative bg-transparent">
+        {activeJob?.status === 'processing' ? (
+          <div className="flex-1 flex items-center justify-center p-8">
+            <TranslationProgress />
+          </div>
+        ) : activeJob ? (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex-1 flex flex-col h-full">
+            <div className="flex-1 overflow-hidden p-4">
+              <PageViewer />
+            </div>
+          </motion.div>
+        ) : (
+          <div className="flex-1 flex items-center justify-center text-white/50 font-display text-center p-8">
+            <p className="bg-black/40 px-4 py-2 rounded-lg backdrop-blur-sm border border-white/5">
+              Select "NEW" to start.
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* Right Column (35%) — Flexible Sidebar */}
+      <div className="flex-[35] flex flex-col h-full min-w-0 shrink-0 bg-black/50 ">
+
+        {/* BOX 1: HISTORY (30% split) */}
+        {jobs.length > 0 && (
+          <div className="flex-[20] min-h-0 overflow-y-auto p-4 custom-scrollbar flex flex-col bg-transparent">
+            <h4 className="text-[14px] font-bold text-white/40 uppercase tracking-wider mb-3 sticky top-0 z-10">
+              History
+            </h4>
+            <div className="flex-1">
+              <JobList />
+            </div>
+          </div>
+        )}
+
+        {/* BOX 2: REFERENCE / UPLOAD (70% split) */}
+        <div className="flex-[80] min-h-0 overflow-hidden flex flex-col bg-transparent">
+          {!activeJob ? (
+            <div className="flex-1 p-4 overflow-y-auto custom-scrollbar">
+              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-transparent">
+                <FileUploader />
+              </motion.div>
+            </div>
+          ) : (
+            <motion.div 
+              initial={{ opacity: 0, x: 20 }} 
+              animate={{ opacity: 1, x: 0 }} 
+              className="flex-1 flex flex-col h-full overflow-hidden bg-transparent"
+            >
+              <OriginalPanel />
+            </motion.div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+</file>
+
 <file path="frontend/src/store/settingsStore.ts">
 import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
@@ -14372,6 +14191,270 @@ export const useSettingsStore = create<SettingsState>()(
     }
   )
 )
+</file>
+
+<file path="frontend/src/store/translatorStore.ts">
+import { create } from 'zustand'
+import { translatorService } from '@/services/translator.service'
+import { useAuthStore } from '@/store/authStore'
+import type { TranslationJobDetail } from '@/services/translator.service'
+import type { TranslationJob, TranslationRegion, PipelineRegion, OverlayMode } from '@/types/translator.types'
+
+export type { TranslationJob }
+
+interface TranslatorState {
+  jobs: TranslationJob[]
+  activeJobId: string | null
+  currentPage: number
+  totalPages: number
+  isUploading: boolean
+  uploadProgress: number
+  sourceLanguage: string
+  targetLanguage: string
+  showOriginal: boolean
+  showOverlay: boolean 
+  overlayMode: OverlayMode
+  showDots: boolean
+  
+  pageRegions: Record<number, (TranslationRegion | PipelineRegion)[]>
+
+  loadJobs: () => Promise<void>
+  uploadFile: (file: File, onProgress?: (pct: number) => void) => Promise<void>
+  selectJob: (id: string) => Promise<void>
+  pollJobStatus: (id: string) => Promise<void>
+  nextPage: () => void
+  prevPage: () => void
+  goToPage: (n: number) => void
+  retranslate: (id: string) => Promise<void>
+  downloadZip: (id: string) => Promise<void>
+  deleteJob: (id: string) => Promise<void>
+  // --- NEW RENAME ACTION ---
+  renameJob: (id: string, newName: string) => Promise<void>
+  
+  toggleShowOriginal: () => void
+  toggleShowOverlay: () => void
+  toggleShowDots: () => void
+  setOverlayMode: (mode: OverlayMode) => void
+  setSourceLanguage: (lang: string) => void
+  setTargetLanguage: (lang: string) => void
+}
+
+function getTotalPages(job: TranslationJob | TranslationJobDetail): number {
+  if ('pages' in job && Array.isArray(job.pages) && job.pages.length > 0) {
+    return job.pages.length
+  }
+  return job.page_count || 1
+}
+
+function triggerBlobDownload(blob: Blob, filename: string): void {
+  const url  = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+export const useTranslatorStore = create<TranslatorState>((set, get) => ({
+  jobs: [],
+  activeJobId: null,
+  currentPage: 1,
+  totalPages: 1,
+  isUploading: false,
+  uploadProgress: 0,
+  sourceLanguage: 'auto',
+  targetLanguage: 'en',
+  showOriginal: false,
+  showOverlay: true,
+  overlayMode: 'dots',
+  showDots: true,
+  pageRegions: {},
+
+  loadJobs: async () => {
+    try {
+      const jobs = await translatorService.getJobs()
+      set({ jobs })
+    } catch (error) {
+      console.error('Failed to load translation jobs:', error)
+    }
+  },
+
+  uploadFile: async (file, onProgress) => {
+    set({ isUploading: true, uploadProgress: 0, pageRegions: {}, overlayMode: 'dots' })
+    const { sourceLanguage, targetLanguage } = get()
+    try {
+      const newJob = await translatorService.uploadFile(
+        file, sourceLanguage, targetLanguage,
+        (pct) => { set({ uploadProgress: pct }); onProgress?.(pct) }
+      )
+      set(state => ({
+        jobs: [newJob, ...state.jobs],
+        activeJobId: newJob.id,
+        totalPages: getTotalPages(newJob),
+        currentPage: 1,
+        isUploading: false,
+        pageRegions: {},
+        overlayMode: 'dots'
+      }))
+    } catch (error) {
+      set({ isUploading: false })
+      console.error('Upload failed:', error)
+    }
+  },
+
+  selectJob: async (id) => {
+    if (!id) {
+      set({
+        activeJobId: null,
+        currentPage: 1,
+        totalPages: 1,
+        showOriginal: false,
+        pageRegions: {},
+      });
+      return;
+    }
+
+    const job = get().jobs.find(j => j.id === id)
+    set({
+      activeJobId: id,
+      currentPage: 1,
+      totalPages: job ? getTotalPages(job) : 1,
+      showOriginal: false,
+      pageRegions: {},
+    })
+    await get().pollJobStatus(id);
+  },
+
+  pollJobStatus: async (id) => {
+    try {
+      const token = useAuthStore.getState().token;
+      const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+      
+      const response = await fetch(`${baseUrl}/api/v1/translate/jobs/${id}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!response.ok) throw new Error(`Status ${response.status}`);
+      const updatedJob: TranslationJobDetail = await response.json();
+      
+      const newPageRegions: Record<number, (TranslationRegion | PipelineRegion)[]> = { ...get().pageRegions }
+      
+      for (const page of updatedJob.pages ?? []) {
+        if (page.regions && page.regions.length > 0) {
+          newPageRegions[page.page_number] = page.regions
+        }
+      }
+
+      set(state => ({
+        jobs: state.jobs.map(j => j.id === id ? updatedJob : j),
+        pageRegions: newPageRegions,
+        ...(state.activeJobId === id && {
+          totalPages: getTotalPages(updatedJob),
+        }),
+      }))
+    } catch (error) {
+      console.error('Polling error:', error)
+    }
+  },
+
+  nextPage: () => {
+    const { currentPage, totalPages } = get()
+    if (currentPage < totalPages) set({ currentPage: currentPage + 1 })
+  },
+
+  prevPage: () => {
+    const { currentPage } = get()
+    if (currentPage > 1) set({ currentPage: currentPage - 1 })
+  },
+
+  goToPage: (n) => {
+    const { totalPages } = get()
+    if (n >= 1 && n <= totalPages) set({ currentPage: n })
+  },
+
+  retranslate: async (id) => {
+    try {
+      const updatedJob = await translatorService.retranslate(id)
+      set(state => ({
+        jobs: state.jobs.map(j => j.id === id ? updatedJob : j),
+        pageRegions: state.activeJobId === id ? {} : state.pageRegions
+      }))
+      void get().pollJobStatus(id)
+    } catch (error) {
+      console.error('Retranslate request failed:', error)
+    }
+  },
+
+  downloadZip: async (id) => {
+    const job = get().jobs.find(j => j.id === id)
+    const filename = job ? `${job.original_filename.replace(/\.[^/.]+$/, '')}_translated.zip` : 'translated.zip'
+    try {
+      const blob = await translatorService.downloadZip(id)
+      triggerBlobDownload(blob, filename)
+    } catch (error) {
+      console.error('Download failed:', error)
+    }
+  },
+
+  deleteJob: async (id) => {
+    try {
+      await translatorService.deleteJob(id)
+      set(state => {
+        const isActiveJob = state.activeJobId === id;
+        return {
+          jobs: state.jobs.filter(j => j.id !== id),
+          activeJobId: isActiveJob ? null : state.activeJobId,
+          pageRegions: isActiveJob ? {} : state.pageRegions,
+        }
+      })
+    } catch (error) {
+      console.error('Delete failed:', error)
+    }
+  },
+
+  // --- NEW RENAME IMPLEMENTATION ---
+  renameJob: async (id, newName) => {
+    // 1. Optimistic UI update
+    set(state => ({
+      jobs: state.jobs.map(j => j.id === id ? { ...j, original_filename: newName } : j)
+    }))
+
+    try {
+      const token = useAuthStore.getState().token
+      const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+      
+      await fetch(`${baseUrl}/api/v1/translate/jobs/${id}/rename`, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ name: newName })
+      })
+    } catch (error) {
+      console.error("Failed to rename job:", error)
+      // Note: We leave the optimistic update as is, 
+      // but in a production app you might want to revert it here.
+    }
+  },
+
+  toggleShowOriginal: () => set(state => ({ showOriginal: !state.showOriginal })),
+  toggleShowOverlay: () => set(state => ({ showOverlay: !state.showOverlay })),
+  
+  toggleShowDots: () => set(state => {
+    const newMode = state.overlayMode === 'dots' ? 'original' : 'dots';
+    return { overlayMode: newMode, showDots: newMode === 'dots' }
+  }),
+  
+  setOverlayMode: (mode) => set({ overlayMode: mode, showDots: mode === 'dots' }),
+  setSourceLanguage: (lang) => set({ sourceLanguage: lang }),
+  setTargetLanguage: (lang) => set({ targetLanguage: lang }),
+}))
 </file>
 
 </files>
