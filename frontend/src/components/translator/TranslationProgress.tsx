@@ -48,7 +48,7 @@ export const TranslationProgress = () => {
         <div className="flex items-center gap-2 text-primary-400">
           <Loader2 size={18} className="animate-spin" />
           <span className="text-sm font-semibold animate-pulse">
-            Translating page {completedPages} of {totalPages}...
+            Translating page {Math.min(Math.max(1, completedPages + 1), totalPages)} of {totalPages}...
           </span>
         </div>
         <span className="text-xs font-medium text-white/50 font-mono">

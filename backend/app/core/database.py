@@ -6,14 +6,16 @@ from app.core.config import settings
 
 engine = create_async_engine(
     settings.DATABASE_URL,
-    echo=settings.ENVIRONMENT == "development",   # log SQL in dev only
-    pool_pre_ping=True,                           # test connections before use
+    echo=False,  
+    future=True,
+    pool_pre_ping=True                        # test connections before use
 )
 
 AsyncSessionLocal = async_sessionmaker(
-    engine,
+    bind=engine,
     class_=AsyncSession,
-    expire_on_commit=False,    # objects usable after commit without reload
+    expire_on_commit=False,
+    autoflush=False,
 )
 
 class Base(DeclarativeBase):
@@ -26,5 +28,5 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             yield session
             await session.commit()
         except Exception:
-            await session.rollback()
+            await session.close()
             raise

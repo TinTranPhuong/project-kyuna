@@ -1,83 +1,131 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useTranslatorStore } from '@/store/translatorStore';
-import { Trash2, FileImage, Loader2, CheckCircle2, AlertCircle, Clock } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { FileText, CheckCircle2, AlertCircle, Loader2, Pencil, Trash2 } from 'lucide-react';
 
-export const JobList = () => {
-  const { jobs, activeJobId, selectJob, deleteJob } = useTranslatorStore();
+// --- Native Date Helper (No external library needed) ---
+function timeAgo(dateString: string) {
+  if (!dateString) return '';
+  const date = new Date(dateString);
+  const now = new Date();
+  const seconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+  
+  if (seconds < 60) return 'just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
 
-  const handleDelete = (e: React.MouseEvent, id: string) => {
-    e.stopPropagation(); // Prevent triggering the row click
-    if (window.confirm('Are you sure you want to delete this translation job?')) {
-      deleteJob(id);
+const JobItem = ({ job, isActive, onClick, onRename, onDelete }: any) => {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editValue, setEditValue] = useState(job.original_filename);
+
+  const handleSave = (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (editValue.trim()) {
+      onRename(job.id, editValue.trim());
+      setIsEditing(false);
     }
   };
-
-  const getStatusIcon = (status: string) => {
-    switch (status.toLowerCase()) {
-      case 'completed': return <CheckCircle2 size={14} className="text-emerald-400" />;
-      case 'processing': return <Loader2 size={14} className="text-blue-400 animate-spin" />;
-      case 'failed': return <AlertCircle size={14} className="text-red-400" />;
-      default: return <Clock size={14} className="text-white/40" />; // pending
-    }
-  };
-
-  if (jobs.length === 0) {
-    return (
-      <div className="p-4 text-center text-sm text-white/40 italic bg-surface-900/30 rounded-lg border border-white/5">
-        No translation jobs yet. Upload a file to get started.
-      </div>
-    );
-  }
 
   return (
-    <div className="flex flex-col gap-2 p-1">
-      {jobs.map((job) => {
-        const isActive = job.id === activeJobId;
-        
-        return (
-          <div
-            key={job.id}
-            onClick={() => selectJob(job.id)}
-            className={cn(
-              "group relative flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-all",
-              isActive 
-                ? "bg-primary-500/10 border-primary-500/30 shadow-sm" 
-                : "bg-surface-900/50 border-white/5 hover:border-white/20 hover:bg-surface-800"
-            )}
-          >
-            <div className="flex items-center gap-3 overflow-hidden">
-              <div className="p-2 rounded bg-surface-950 text-white/60 shrink-0">
-                <FileImage size={16} />
-              </div>
-              
-              <div className="flex flex-col overflow-hidden">
-                <span className="text-sm font-medium text-white/90 truncate pr-4">
-                  {/* Assumes job object has a filename property. Fallback provided. */}
-                  {(job as any).filename || `Translation Job #${job.id.substring(0, 5)}`}
-                </span>
-                <div className="flex items-center gap-1.5 mt-0.5">
-                  {getStatusIcon((job as any).status || 'pending')}
-                  <span className="text-[10px] text-white/40 uppercase tracking-wider font-semibold">
-                    {(job as any).status || 'pending'}
-                  </span>
-                  <span className="text-[10px] text-white/20 ml-1">
-                    • {new Date((job as any).created_at || Date.now()).toLocaleDateString()}
-                  </span>
-                </div>
-              </div>
-            </div>
+    <div
+      onClick={(e) => {
+        if (!isEditing) onClick();
+      }}
+      className={cn(
+        "group flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-all border",
+        isActive 
+          ? "bg-primary-500/10 border-primary-500/50" 
+          : "bg-surface-900 border-white/5 hover:bg-white/5 hover:border-white/10"
+      )}
+    >
+      {/* Icon Status */}
+      <div className={cn("shrink-0", isActive ? "text-primary-400" : "text-white/40")}>
+        {job.status === 'processing' ? <Loader2 size={18} className="animate-spin text-blue-400" /> :
+         job.status === 'completed' ? <CheckCircle2 size={18} className="text-green-400" /> :
+         job.status === 'failed' ? <AlertCircle size={18} className="text-red-400" /> :
+         <FileText size={18} />}
+      </div>
 
-            <button
-              onClick={(e) => handleDelete(e, job.id)}
-              className="absolute right-3 p-1.5 rounded-md text-white/20 hover:text-red-400 hover:bg-red-400/10 opacity-0 group-hover:opacity-100 transition-all"
-              title="Delete Job"
-            >
-              <Trash2 size={16} />
-            </button>
+      {/* Content */}
+      <div className="flex-1 min-w-0">
+        {isEditing ? (
+          <form onSubmit={handleSave} className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
+            <input
+              autoFocus
+              type="text"
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              className="w-full bg-surface-950 border border-primary-500/50 rounded px-1.5 py-0.5 text-xs text-white outline-none"
+              onBlur={() => handleSave()}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  setEditValue(job.original_filename);
+                  setIsEditing(false);
+                }
+              }}
+            />
+          </form>
+        ) : (
+          <div className="flex flex-col">
+            <span className={cn("text-xs font-medium truncate", isActive ? "text-white" : "text-white/70 group-hover:text-white")}>
+              {job.original_filename}
+            </span>
+            <span className="text-[10px] text-white/30 truncate">
+               {timeAgo(job.created_at)}
+            </span>
           </div>
-        );
-      })}
+        )}
+      </div>
+
+      {/* Actions (Visible on Hover) */}
+      {!isEditing && (
+        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button 
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsEditing(true);
+            }}
+            className="p-1.5 text-white/40 hover:text-white hover:bg-white/10 rounded transition-colors"
+            title="Rename"
+          >
+            <Pencil size={12} />
+          </button>
+          <button 
+            onClick={(e) => {
+              e.stopPropagation();
+              if (confirm('Are you sure you want to delete this job?')) onDelete(job.id);
+            }}
+            className="p-1.5 text-white/40 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
+            title="Delete"
+          >
+            <Trash2 size={12} />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export const JobList = () => {
+  const { jobs, activeJobId, selectJob, renameJob, deleteJob } = useTranslatorStore();
+
+  return (
+    <div className="flex flex-col gap-2">
+      {jobs.map((job) => (
+        <JobItem
+          key={job.id}
+          job={job}
+          isActive={activeJobId === job.id}
+          onClick={() => selectJob(job.id)}
+          onRename={renameJob}
+          onDelete={deleteJob}
+        />
+      ))}
     </div>
   );
 };

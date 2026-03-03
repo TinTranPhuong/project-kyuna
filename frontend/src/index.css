@@ -11,8 +11,14 @@
 
   body {
     /* Uses custom surface color from our tailwind.config.ts */
-    @apply bg-surface-900 text-white font-sans antialiased;
-    overflow: hidden; /* Prevent double scrollbars; handled by internal layouts */
+    background: transparent !important;
+    @apply text-white font-sans antialiased;
+    
+    margin: 0;
+    padding: 0;
+    height: 100vh;
+    width: 100vw;
+    overflow: hidden;
   }
 
   /* Custom thin scrollbar for a cleaner look */

@@ -132,7 +132,8 @@ def _parse_translation_response(response: str, original_regions: list[dict]) -> 
 
 async def translate_page(regions: list[dict]) -> list[dict]:
     """
-    Stage 5: Translate ONE page using custom 'Creative' settings.
+    Stage 5: Translate ONE page using custom 'Sugoi' settings.
+    Includes terminal streaming for debug visibility.
     """
     if not regions:
         return []
@@ -143,16 +144,18 @@ async def translate_page(regions: list[dict]) -> list[dict]:
         indent=2,
     )
     
+    # ♻️ UPDATED PROMPT: Adds a "One-Shot" Example to prevent echoing
     system_prompt = (
-        "You are a professional manga translator specializing in Japanese to English localization.\n"
-        "You are translating a single manga page. All items below are from the same scene.\n\n"
+        "You are a professional manga translator. Your task is to fill the empty 'english' field in the provided JSON.\n"
         "Rules:\n"
-        "- Translate ONLY the \"japanese\" field values. Fill in the \"english\" field.\n"
-        "- Keep all other fields (index, bbox) EXACTLY unchanged.\n"
-        "- Preserve character voice and tone consistently across all bubbles.\n"
-        "- For sound effects (short katakana like ドン, ガン): use punchy English equivalents (BOOM, CRASH).\n"
-        "- For narration/internal monologue: natural flowing English.\n"
-        "- Return ONLY the completed JSON array. No explanations, no markdown fences."
+        "1. Translate the text in the 'japanese' field to English.\n"
+        "2. Put the translation ONLY in the 'english' field.\n"
+        "3. If the text is already English, copy it to the 'english' field.\n"
+        "4. Return ONLY the JSON array.\n\n"
+        "Example Interaction:\n"
+        "User: [{\"index\": 0, \"japanese\": \"こんにちは\", \"english\": \"\"}]\n"
+        "Assistant: [{\"index\": 0, \"japanese\": \"こんにちは\", \"english\": \"Hello there.\"}]\n\n"
+        "Now process this real data:"
     )
     
     messages = [
@@ -162,20 +165,23 @@ async def translate_page(regions: list[dict]) -> list[dict]:
     
     response_text = ""
     
-    # 👇 HERE IS THE HARDCODED CONFIGURATION
+    print(f"\n🔹 [Sugoi-14B] Translating {len(regions)} bubbles...")
+    print("---------------------------------------------------")
+
     async for token in model_manager.generate_stream(
         messages=messages,
         max_tokens=4096,
-        
-        # 🚨 Your Custom "Creative" Settings:
-        temperature=0.5,      # High creativity
-        top_k=40,             # Standard filtering
-        top_p=0.95,           # High nucleus sampling
-        min_p=0.05,           # Cut off low-probability tokens
-        repeat_penalty=1.1,   # Reduce repetition
-        
+        temperature=0.3,      
+        top_k=40,             
+        top_p=0.9,            
+        min_p=0.05,           
+        repeat_penalty=1.1,   
         stop=None,
     ):
+        print(token, end="", flush=True)
         response_text += token
         
+    print("\n---------------------------------------------------")
+    print("✅ [Sugoi-14B] Generation Complete.\n")
+
     return _parse_translation_response(response_text, regions)

@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File,
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from pydantic import BaseModel  # <--- Added for request body validation
 
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -28,8 +29,12 @@ limiter = Limiter(key_func=get_remote_address)
 MAGIC_BYTES = {
     "jpg": b"\xff\xd8\xff",
     "png": b"\x89\x50\x4e\x47",
-    "zip": b"\x50\x4b\x03\x04",  # Also covers .cbz files
+    "zip_pk": b"\x50\x4b",  # Also covers .cbz files
 }
+
+# --- NEW MODEL FOR RENAME ---
+class RenameRequest(BaseModel):
+    name: str
 
 @router.post("/upload", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
 @limiter.limit("5/minute")
@@ -43,44 +48,29 @@ async def upload_file(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    Upload an image or CBZ/ZIP archive for translation.
-    Processing happens asynchronously in the background based on the selected engine.
-    """
-    # Bulletproof defaults:
     source_language = source_language or "auto"
     target_language = target_language or "en"
     
-    # Engine fallback - Default to the new 6-stage pipeline
     valid_engines = {"pipeline", "vision", "ocr_llm"}
     if not engine or engine not in valid_engines:
         engine = "pipeline"
 
-    # 1. Validate file size
     max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
     if file.size and file.size > max_bytes:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"File exceeds maximum allowed size of {settings.MAX_UPLOAD_SIZE_MB}MB."
-        )
+        raise HTTPException(status_code=413, detail=f"File too large.")
 
-    # 2. Validate file type via magic bytes
     header = await file.read(4)
-    await file.seek(0)  # Reset cursor for actual saving
+    await file.seek(0)
     
     is_valid_type = (
         header.startswith(MAGIC_BYTES["jpg"]) or 
         header.startswith(MAGIC_BYTES["png"]) or 
-        header.startswith(MAGIC_BYTES["zip"])
+        header.startswith(MAGIC_BYTES["zip_pk"])
     )
     
     if not is_valid_type:
-        raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail="Invalid file format. Only JPG, PNG, and ZIP/CBZ are allowed."
-        )
+        raise HTTPException(status_code=415, detail="Invalid file type.")
 
-    # 3. Create TranslationJob in DB to get the job ID
     job = await translator_service.create_translation_job(
         db=db, 
         user_id=current_user.id, 
@@ -90,21 +80,18 @@ async def upload_file(
         target_lang=target_language
     )
 
-    # 4. Save file to disk
     original_dir = Path(settings.UPLOAD_DIR) / str(current_user.id) / str(job.id) / "original"
     original_dir.mkdir(parents=True, exist_ok=True)
     file_path = original_dir / file.filename
 
     async with aiofiles.open(file_path, "wb") as out_file:
-        while content := await file.read(1024 * 1024):  # 1MB chunks to prevent memory spikes
+        while content := await file.read(1024 * 1024):
             await out_file.write(content)
 
-    # 5. Update job with the actual saved file path and set engine
     job = await translator_service.update_job_file_path(db, job.id, str(file_path))
     job.engine = engine
     await db.commit()
 
-    # 6. Dispatch background processing task based on selected engine
     if engine == "ocr_llm":
         background_tasks.add_task(translator_service.process_job, job.id, db)
     elif engine == "vision":
@@ -121,7 +108,6 @@ async def list_jobs(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """List current user's translation jobs (newest first)."""
     return await translator_service.get_user_jobs(db, current_user.id, skip, limit)
 
 @router.get("/jobs/{job_id}", response_model=JobDetailResponse)
@@ -130,8 +116,24 @@ async def get_job_detail(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Get specific job details including all its pages."""
     return await translator_service.get_job_detail(db, current_user.id, job_id)
+
+# --- NEW RENAME ENDPOINT ---
+@router.patch("/jobs/{job_id}/rename", response_model=JobResponse)
+async def rename_job(
+    job_id: UUID,
+    request: RenameRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    job = await db.get(TranslationJob, job_id)
+    if not job or job.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    job.original_filename = request.name
+    await db.commit()
+    await db.refresh(job)
+    return job
 
 @router.get("/jobs/{job_id}/pages/{page_number}/pipeline-progress")
 async def pipeline_progress(
@@ -140,12 +142,7 @@ async def pipeline_progress(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    SSE stream of pipeline stage progress for a single page.
-    Polls DB every 500ms for phase_status changes.
-    Late-connecting clients (after completion) receive a synthetic full history.
-    """
-    # Verify job ownership
+    # Verify job ownership once
     job = await db.get(TranslationJob, job_id)
     if not job or job.user_id != current_user.id:
         raise HTTPException(404, "Job not found")
@@ -162,49 +159,51 @@ async def pipeline_progress(
     async def event_generator():
         last_phase_status = None
         while True:
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(2.0)
             
-            async with AsyncSessionLocal() as stream_db:
-                result = await stream_db.execute(
-                    select(TranslationPage).where(
-                        TranslationPage.job_id == job_id,
-                        TranslationPage.page_number == page_number,
+            try:
+                async with AsyncSessionLocal() as stream_db:
+                    result = await stream_db.execute(
+                        select(TranslationPage).where(
+                            TranslationPage.job_id == job_id,
+                            TranslationPage.page_number == page_number,
+                        )
                     )
-                )
-                page = result.scalar_one_or_none()
+                    page = result.scalar_one_or_none()
 
-            if page is None:
-                yield f"data: {json.dumps({'waiting': True})}\n\n"
-                continue
+                if page is None:
+                    yield f"data: {json.dumps({'waiting': True})}\n\n"
+                    continue
 
-            status = page.phase_status
+                status = page.phase_status
 
-            # Emit event when phase changes
-            if status != last_phase_status:
-                stage_num, stage_name = PHASE_NAMES.get(status, (0, status))
-                
-                if status == "done" and page.regions_json:
-                    # Stage 6: emit all regions
-                    regions = json.loads(page.regions_json)
-                    yield f"data: {json.dumps({'stage':4,'name':'Hangoff Protocol — loading Qwen 35B','status':'done'})}\n\n"
-                    yield f"data: {json.dumps({'stage':5,'name':'Translating with Qwen 35B','status':'done'})}\n\n"
-                    yield f"data: {json.dumps({'stage':6,'name':'Complete','status':'done','regions':regions})}\n\n"
-                    return
-                elif status == "failed":
-                    yield f"data: {json.dumps({'stage':0,'name':'Failed','status':'failed','error':page.error_message})}\n\n"
-                    return
-                else:
-                    yield f"data: {json.dumps({'stage':stage_num,'name':stage_name,'status':'running'})}\n\n"
+                if status != last_phase_status or last_phase_status is None:
+                    stage_num, stage_name = PHASE_NAMES.get(status, (0, status))
                     
-                last_phase_status = status
+                    if status == "done" and page.regions_json:
+                        regions = json.loads(page.regions_json)
+                        yield f"data: {json.dumps({'stage':4,'name':'Hangoff Protocol','status':'done'})}\n\n"
+                        yield f"data: {json.dumps({'stage':5,'name':'Translating','status':'done'})}\n\n"
+                        yield f"data: {json.dumps({'stage':6,'name':'Complete','status':'done','regions':regions})}\n\n"
+                        return
+                    elif status == "failed":
+                        yield f"data: {json.dumps({'stage':0,'name':'Failed','status':'failed','error':page.error_message})}\n\n"
+                        return
+                    else:
+                        yield f"data: {json.dumps({'stage':stage_num,'name':stage_name,'status':'running'})}\n\n"
+                        
+                    last_phase_status = status
+            except Exception as e:
+                print(f"Stream error: {e}")
+                yield f"data: {json.dumps({'waiting': True})}\n\n"
 
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control":      "no-cache",
-            "X-Accel-Buffering":  "no",
-            "Connection":         "keep-alive",
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
         },
     )
 
@@ -215,7 +214,6 @@ async def stream_page_regions(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Legacy SSE stream for the vision single-pass pipeline."""
     job = await db.get(TranslationJob, job_id)
     if not job or job.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -223,7 +221,7 @@ async def stream_page_regions(
     async def event_generator():
         last_region_count = 0
         while True:
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(2.0) 
             
             async with AsyncSessionLocal() as stream_db:
                 current_job = await stream_db.get(TranslationJob, job_id)
@@ -281,9 +279,6 @@ async def get_page_regions(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    Fetch parsed regions for a completed page without keeping an SSE connection open.
-    """
     job = await db.get(TranslationJob, job_id)
     if not job or job.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -311,30 +306,23 @@ async def get_page_regions(
         "has_text": page.has_text
     }
 
-@router.post("/jobs/{job_id}/retranslate", status_code=status.HTTP_202_ACCEPTED)
+@router.post("/jobs/{job_id}/retranslate", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
 async def retranslate_job(
     job_id: UUID,
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    Reset a job's status and enqueue it for re-translation.
-    Dispatch logic supports both the new Pipeline and the legacy Vision engine.
-    """
-    # 1. Reset the DB state (clears phase_status, regions_json, etc.)
     job = await translator_service.reset_job_for_retranslation(db, current_user.id, job_id)
     
-    # 2. Dispatch the correct background task based on the job's engine
     if job.engine == "pipeline":
         background_tasks.add_task(translator_service.process_job_pipeline, job.id)
     elif job.engine == "vision":
         background_tasks.add_task(translator_service.process_job_vision, job.id)
     else:
-        # Legacy fallback (ocr_llm)
         background_tasks.add_task(translator_service.process_job, job.id, db)
         
-    return {"message": f"Job queued for {job.engine} re-translation"}
+    return job
 
 @router.delete("/jobs/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_job(
@@ -342,7 +330,6 @@ async def delete_job(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Delete a job, its database records, and all related files on disk."""
     await translator_service.delete_translation_job(db, current_user.id, job_id)
     return None
 
@@ -353,22 +340,16 @@ async def get_original_page(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Serve the original un-translated image page with a retry buffer for the background task."""
-    max_retries = 10  # Up to 5 seconds of buffering
-    
+    max_retries = 5
     for attempt in range(max_retries):
         try:
             file_path = await translator_service.get_page_file_path(
-                db=db, 
-                user_id=current_user.id, 
-                job_id=job_id, 
-                page_num=page_num, 
-                image_type="original"
+                db=db, user_id=current_user.id, job_id=job_id, page_num=page_num, image_type="original"
             )
             return FileResponse(file_path)
         except HTTPException as e:
-            if e.status_code == 404 and "not found" in e.detail and attempt < max_retries - 1:
-                await asyncio.sleep(0.5)
+            if e.status_code == 404 and attempt < max_retries - 1:
+                await asyncio.sleep(1)
                 continue
             raise e
 
@@ -379,48 +360,26 @@ async def get_translated_page(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    Serve the translated image. 
-    Fallback: If translated image isn't ready (streaming), serve the original.
-    Includes a retry buffer to prevent race conditions during DB initialization.
-    """
-    max_retries = 10
-    
+    max_retries = 5
     for attempt in range(max_retries):
         try:
             file_path = await translator_service.get_page_file_path(
-                db=db, 
-                user_id=current_user.id, 
-                job_id=job_id, 
-                page_num=page_num, 
-                image_type="translated"
+                db=db, user_id=current_user.id, job_id=job_id, page_num=page_num, image_type="translated"
             )
             return FileResponse(file_path)
-            
         except HTTPException as e:
             if e.status_code == 404:
-                if "not found for this job" in e.detail.lower() and attempt < max_retries - 1:
-                    await asyncio.sleep(0.5)
-                    continue
-                
                 try:
                     orig_path = await translator_service.get_page_file_path(
-                        db=db, 
-                        user_id=current_user.id, 
-                        job_id=job_id, 
-                        page_num=page_num, 
-                        image_type="original"
+                        db=db, user_id=current_user.id, job_id=job_id, page_num=page_num, image_type="original"
                     )
                     return FileResponse(orig_path)
-                except HTTPException as inner_e:
-                    if inner_e.status_code == 404 and attempt < max_retries - 1:
-                        await asyncio.sleep(0.5)
-                        continue
-                    
-                    if attempt == max_retries - 1:
-                        raise inner_e
-            else:
-                raise e
+                except:
+                    pass
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1)
+                    continue
+            raise e
 
 @router.get("/jobs/{job_id}/download")
 async def download_translated_job(
@@ -428,9 +387,7 @@ async def download_translated_job(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Stream an in-memory ZIP archive of all translated pages."""
     zip_stream = await translator_service.create_zip_stream(db, current_user.id, job_id)
-    
     return StreamingResponse(
         zip_stream,
         media_type="application/zip",

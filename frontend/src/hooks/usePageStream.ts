@@ -1,137 +1,144 @@
 import { useState, useEffect, useRef } from 'react'
-import { useTranslatorStore } from '@/store/translatorStore'
-import type { TranslationRegion, RegionStreamEvent } from '@/types/translator.types'
 import { useAuthStore } from '@/store/authStore'
+import { useTranslatorStore } from '@/store/translatorStore'
+import type { PhaseEvent, PhaseState, PipelineRegion } from '@/types/translator.types'
 
-interface UsePageStreamResult {
-  regions: TranslationRegion[]
+interface UsePhaseStreamResult {
+  phases: PhaseState[]
+  regions: PipelineRegion[]
   isDone: boolean
-  isWaiting: boolean
-  error: string | null
+  isFailed: boolean
+  errorMsg: string | null
 }
 
-export function usePageStream(
-  jobId: string | null,
-  pageNumber: number
-): UsePageStreamResult {
-  const [regions, setRegions]     = useState<TranslationRegion[]>([])
-  const [isDone, setIsDone]       = useState(false)
-  const [isWaiting, setIsWaiting] = useState(false)
-  const [error, setError]         = useState<string | null>(null)
-  
-  const sourceRef                 = useRef<EventSource | null>(null)
-  
-  // Note: Cast to 'any' temporarily until pageRegions is added to the TranslatorState interface
-  const cachedRegions = useTranslatorStore(s => 
-    jobId ? (s as any).pageRegions?.[pageNumber] : undefined
-  ) as TranslationRegion[] | undefined
+const STAGE_NAMES = [
+  '',
+  'Detecting text regions',
+  'Cropping bubbles',
+  'Reading Japanese text',
+  'Hangoff Protocol - loading Qwen 35B',
+  'Translating with Qwen 35B',
+  'Complete',
+]
 
-  const token   = useAuthStore(s => s.token)
+function initialPhases(): PhaseState[] {
+  return STAGE_NAMES.slice(1).map((name, i) => ({
+    stage: i + 1,
+    name,
+    status: 'waiting' as const,
+  }))
+}
+
+export function usePhaseStream(
+  jobId: string | null,
+  pageNumber: number,
+): UsePhaseStreamResult {
+  const [phases, setPhases] = useState<PhaseState[]>(initialPhases())
+  const [regions, setRegions] = useState<PipelineRegion[]>([])
+  const [isDone, setIsDone] = useState(false)
+  const [isFailed, setIsFailed] = useState(false)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
+
+  const readerRef = useRef<ReadableStreamDefaultReader | null>(null)
+  
+  const cachedRegions = useTranslatorStore(s => jobId ? s.pageRegions[pageNumber] : undefined)
+  const token = useAuthStore(s => s.token)
   const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
   useEffect(() => {
-    // 1. Reset all state when jobId or pageNumber changes
+    if (cachedRegions && cachedRegions.length > 0) {
+      setRegions(cachedRegions as unknown as PipelineRegion[])
+      setPhases(initialPhases().map(p => ({ ...p, status: 'done' })))
+      setIsDone(true)
+    }
+  }, [cachedRegions])
+
+  useEffect(() => {
+    if (!jobId || (cachedRegions && cachedRegions.length > 0)) return
+
+    setPhases(initialPhases())
     setRegions([])
     setIsDone(false)
-    setIsWaiting(false)
-    setError(null)
+    setIsFailed(false)
+    setErrorMsg(null)
 
-    // 2. If jobId is null, return early
-    if (!jobId) return
+    let cancelled = false
 
-    // 3. If cachedRegions is defined (page already processed): skip connection
-    if (cachedRegions && cachedRegions.length > 0) {
-      setRegions(cachedRegions)
-      setIsDone(true)
-      return
-    }
+    const connect = async () => {
+      // THE FIX: Ensure we have a token before connecting
+      if (!token) return;
 
-    // 4. Setup AbortController for clean teardown on unmount / dependency change
-    const abortController = new AbortController()
-
-    const fetchStream = async () => {
       try {
-        const response = await fetch(`${baseUrl}/api/v1/translate/jobs/${jobId}/pages/${pageNumber}/stream`, {
-          headers: { 
-            Authorization: `Bearer ${token}`,
-            Accept: 'text/event-stream'
-          },
-          signal: abortController.signal
-        })
+        const response = await fetch(
+          `${baseUrl}/api/v1/translate/jobs/${jobId}/pages/${pageNumber}/pipeline-progress`,
+          {
+            headers: {
+              // THE FIX: Add Authorization header to stop 401 errors
+              Authorization: `Bearer ${token}`,
+              'Cache-Control': 'no-cache',
+            }
+          }
+        )
 
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`)
-        }
+        if (!response.ok || !response.body) return
 
-        const reader = response.body!.getReader()
+        const reader = response.body.getReader()
+        readerRef.current = reader
         const decoder = new TextDecoder()
         let buffer = ''
 
-        while (true) {
+        while (!cancelled) {
           const { done, value } = await reader.read()
           if (done) break
 
           buffer += decoder.decode(value, { stream: true })
-          
-          // Split chunks by newline, keeping the last incomplete fragment in the buffer
           const lines = buffer.split('\n')
-          buffer = lines.pop() || ''
+          buffer = lines.pop() ?? ''
 
           for (const line of lines) {
-            if (line.trim() === '') continue
-            
-            if (line.startsWith('data: ')) {
-              const dataStr = line.slice(6).trim()
-              if (!dataStr) continue
-
-              try {
-                const event = JSON.parse(dataStr) as RegionStreamEvent
-
-                // Handle: { waiting: true }
-                if ('waiting' in event && event.waiting) {
-                  setIsWaiting(true)
-                } 
-                // Handle: Region arrival (has bbox)
-                else if ('bbox' in event) {
-                  setIsWaiting(false)
-                  setRegions(prev => {
-                    const next = [...prev]
-                    next[event.index] = event // Sparse array assignment (handles out-of-order)
-                    return next
-                  })
-                } 
-                // Handle: { done: true } or { error: string, done: true }
-                else if ('done' in event && event.done) {
-                  if ('error' in event) {
-                    setError(event.error)
-                  }
+            if (!line.startsWith('data: ')) continue
+            try {
+              const event = JSON.parse(line.slice(6)) as PhaseEvent
+              if ('waiting' in event) continue
+              if ('stage' in event) {
+                if (event.stage === 6 && event.status === 'done') {
+                  const stage6Event = event as { stage: 6; regions: PipelineRegion[] }
+                  setRegions(stage6Event.regions)
+                  setPhases(initialPhases().map(p => ({ ...p, status: 'done' })))
                   setIsDone(true)
-                  setIsWaiting(false)
                   reader.cancel()
-                  return // Exit the loop and close stream
+                  return
                 }
-              } catch (err) {
-                console.error('Failed to parse SSE JSON event:', err, dataStr)
+                if (event.stage === 0 && event.status === 'failed') {
+                  const failedEvent = event as { stage: 0; error: string }
+                  setIsFailed(true)
+                  setErrorMsg(failedEvent.error)
+                  reader.cancel()
+                  return
+                }
+                let detailText: string | undefined = undefined
+                if ('region_count' in event && event.region_count !== undefined) {
+                  detailText = `${event.region_count} bubbles`
+                } else if ('done' in event && 'total' in event) {
+                  detailText = `${event.done}/${event.total} bubbles`
+                }
+                setPhases(prev => prev.map(p =>
+                  p.stage === event.stage
+                    ? { ...p, status: event.status === 'running' ? 'running' : 'done', detail: detailText }
+                    : p
+                ))
               }
-            }
+            } catch { }
           }
         }
-      } catch (err: any) {
-        // Ignore AbortError since it's an expected teardown behavior
-        if (err.name !== 'AbortError') {
-          setError(err.message || 'Stream connection failed')
-          setIsDone(true)
-        }
-      }
+      } catch { }
     }
-
-    fetchStream()
-
-    // 5. Cleanup: aborting the controller immediately cancels the fetch & reader
+    connect()
     return () => {
-      abortController.abort()
+      cancelled = true
+      readerRef.current?.cancel()
     }
-  }, [jobId, pageNumber, cachedRegions, baseUrl, token])
+  }, [jobId, pageNumber, token, baseUrl, cachedRegions])
 
-  return { regions, isDone, isWaiting, error }
+  return { phases, regions, isDone, isFailed, errorMsg }
 }

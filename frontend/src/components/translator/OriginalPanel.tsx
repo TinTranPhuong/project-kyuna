@@ -1,100 +1,131 @@
-import { useRef, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslatorStore } from '@/store/translatorStore';
-import { cn } from '@/lib/utils';
 import { translatorService } from '@/services/translator.service';
+import { cn } from '@/lib/utils';
+import { Loader2, Image as ImageIcon, Plus } from 'lucide-react';
 
-// --- NEW: Sub-component to manage individual thumbnail fetching and memory ---
-const ThumbnailImage = ({ jobId, pageNum, isActive }: { jobId: string; pageNum: number; isActive: boolean }) => {
-  const [imgSrc, setImgSrc] = useState<string | null>(null);
+const Thumbnail = ({ 
+  jobId, 
+  pageNumber, 
+  isActive, 
+  onClick 
+}: { 
+  jobId: string, 
+  pageNumber: number, 
+  isActive: boolean, 
+  onClick: () => void 
+}) => {
+  const [src, setSrc] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    let isMounted = true;
-    let objectUrl: string | null = null;
-
-    const fetchImage = async () => {
+    let active = true;
+    const load = async () => {
       try {
-        // Fetch the blob using our authenticated service (fixes the 404 and 401!)
-        const blob = await translatorService.getPageBlob(jobId, pageNum, 'original');
-        if (isMounted) {
-          objectUrl = URL.createObjectURL(blob);
-          setImgSrc(objectUrl);
+        const blob = await translatorService.getPageBlob(jobId, pageNumber, 'original');
+        if (active) {
+          const url = URL.createObjectURL(blob);
+          setSrc(url);
+          setLoading(false);
         }
-      } catch (error) {
-        console.error(`Failed to fetch thumbnail for page ${pageNum}:`, error);
+      } catch (e) {
+        if (active) setLoading(false);
       }
     };
-
-    fetchImage();
-
-    // Cleanup to prevent memory leaks when thumbnails are unmounted
-    return () => {
-      isMounted = false;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [jobId, pageNum]);
+    load();
+    return () => { active = false; if (src) URL.revokeObjectURL(src); };
+  }, [jobId, pageNumber]);
 
   return (
-    <img 
-      src={imgSrc || undefined} 
-      alt={`Original Page ${pageNum}`} 
+    <button
+      onClick={onClick}
       className={cn(
-        "w-full h-full object-cover transition-opacity",
-        isActive ? "opacity-100" : "opacity-50 group-hover:opacity-80",
-        !imgSrc && "animate-pulse bg-white/5" // Nice loading skeleton effect
+        "relative w-full aspect-[2/3] overflow-hidden rounded-sm border transition-all focus:outline-none",
+        isActive 
+          ? "border-primary-500 ring-2 ring-primary-500 z-10" 
+          : "border-white/10 hover:border-white/40 hover:brightness-110"
       )}
-      loading="lazy"
-    />
+      title={`Jump to page ${pageNumber}`}
+    >
+      {loading ? (
+        <div className="flex h-full w-full items-center justify-center bg-surface-800">
+          <Loader2 className="h-4 w-4 animate-spin text-white/20" />
+        </div>
+      ) : src ? (
+        <img 
+          src={src} 
+          alt={`Page ${pageNumber}`} 
+          className="h-full w-full object-cover"
+          loading="lazy"
+        />
+      ) : (
+        <div className="flex h-full w-full items-center justify-center bg-surface-800">
+          <ImageIcon className="h-5 w-5 text-white/10" />
+        </div>
+      )}
+      
+      <div className={cn(
+        "absolute bottom-0 right-0 px-1 py-0.5 text-[8px] font-mono font-bold rounded-tl-sm leading-none",
+        isActive ? "bg-primary-500 text-black" : "bg-black/60 text-white backdrop-blur-sm"
+      )}>
+        {pageNumber}
+      </div>
+    </button>
   );
 };
 
-// --- MAIN COMPONENT ---
 export const OriginalPanel = () => {
-  const { activeJobId, currentPage, totalPages, goToPage } = useTranslatorStore();
-  const activeRef = useRef<HTMLButtonElement>(null);
+  const { activeJobId, totalPages, currentPage, goToPage, selectJob } = useTranslatorStore();
 
-  // Auto-scroll to keep the active thumbnail in view
-  useEffect(() => {
-    if (activeRef.current) {
-      activeRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }
-  }, [currentPage]);
-
-  // If no job is selected, hide the panel
   if (!activeJobId) return null;
 
-  // Create an array [1, 2, 3... totalPages] to map over
   const pages = Array.from({ length: totalPages }, (_, i) => i + 1);
 
-  return (
-    <div className="w-32 flex-shrink-0 bg-surface-950 border-l border-white/5 overflow-y-auto custom-scrollbar flex flex-col p-2 gap-3">
-      {pages.map((pageNum) => {
-        const isActive = pageNum === currentPage;
+  // This resets the UI state to show the FileUploader again
+  const handleNewUpload = () => {
+    selectJob(null as any); 
+  };
 
-        return (
-          <button
-            key={pageNum}
-            ref={isActive ? activeRef : null}
-            onClick={() => goToPage(pageNum)}
-            className={cn(
-              "relative group w-full aspect-[2/3] rounded-md overflow-hidden border-2 transition-all shrink-0 bg-surface-900",
-              isActive 
-                ? "border-primary-500 shadow-[0_0_15px_rgba(16,185,129,0.2)]" 
-                : "border-transparent hover:border-white/20"
-            )}
-          >
-            {/* Render our new authenticated thumbnail component */}
-            <ThumbnailImage jobId={activeJobId} pageNum={pageNum} isActive={isActive} />
-            
-            {/* Page Number Badge */}
-            <div className={cn(
-              "absolute bottom-1 right-1 px-1.5 py-0.5 rounded text-[10px] font-bold shadow-md",
-              isActive ? "bg-primary-500 text-white" : "bg-black/80 text-white/80"
-            )}>
-              {pageNum}
-            </div>
-          </button>
-        );
-      })}
+  return (
+    <div className="flex flex-col h-full w-full bg-surface-950">
+      
+      {/* Header with New Button */}
+      <div className="p-3 border-b border-white/10 bg-surface-950/95 backdrop-blur sticky top-0 z-20 flex justify-between items-center shadow-md">
+        <div className="flex items-center gap-2">
+          <h3 className="text-[14px] font-bold text-white/40 uppercase tracking-wider">
+            Content
+          </h3>
+          <span className="text-[14px] bg-white/5 px-2 py-0.5 rounded-full text-white/40 font-mono">
+            {pages.length}P
+          </span>
+        </div>
+
+        {/* NEW UPLOAD BUTTON */}
+        <button 
+          onClick={handleNewUpload}
+          className="flex items-center gap-1 px-2 py-1 bg-primary-500/10 hover:bg-primary-500/20 text-primary-400 text-[10px] font-bold uppercase tracking-wider rounded border border-primary-500/20 transition-colors"
+          title="Upload a new file"
+        >
+          <Plus size={12} />
+          <span>NEW</span>
+        </button>
+      </div>
+
+      {/* SCROLL AREA */}
+      <div className="flex-1 overflow-y-auto custom-scrollbar p-2">
+        {/* YOUR LAYOUT: Preserved exactly as you wrote it */}
+        <div className="grid grid-cols-3 lg:grid-cols-4 gap-1.5">
+          {pages.map((pageNum) => (
+            <Thumbnail
+              key={`${activeJobId}-${pageNum}`}
+              jobId={activeJobId}
+              pageNumber={pageNum}
+              isActive={currentPage === pageNum}
+              onClick={() => goToPage(pageNum)}
+            />
+          ))}
+        </div>
+      </div>
     </div>
   );
 };
