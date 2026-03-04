@@ -159,21 +159,21 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   };
 
   // --- Handlers: Appearance & Account ---
+  const setCustomWallpaper = useSettingsStore(state => state.setCustomWallpaper);
+
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
       reader.onloadend = () => {
-        localStorage.setItem('kyuna-bg', reader.result as string);
-        window.dispatchEvent(new Event('bg-updated'));
+        setCustomWallpaper(reader.result as string);
       };
       reader.readAsDataURL(file);
     }
   };
 
   const clearCustomBackground = () => {
-    localStorage.removeItem('kyuna-bg');
-    window.dispatchEvent(new Event('bg-updated'));
+    setCustomWallpaper(null);
   };
 
   const handleSaveUsername = async (e: FormEvent) => {

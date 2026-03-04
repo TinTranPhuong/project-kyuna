@@ -1,8 +1,6 @@
 import { create } from 'zustand'
 import { notesService } from '@/services/notes.service'
 
-// is_open is pure UI state — not stored in the DB.
-// Notes always load as closed; users open them from the manager.
 export interface Note {
   id: string
   title: string
@@ -15,15 +13,12 @@ interface NoteStore {
   isManagerOpen: boolean
   isLoading: boolean
 
-  // Lifecycle
   loadNotes: () => Promise<void>
 
-  // UI
   setManagerOpen: (isOpen: boolean) => void
   openNote: (id: string) => void
   closeNote: (id: string) => void
 
-  // CRUD (synced to PostgreSQL)
   addNote: () => Promise<void>
   updateNote: (id: string, text: string) => Promise<void>
   updateNoteTitle: (id: string, title: string) => Promise<void>
@@ -35,7 +30,6 @@ export const useNoteStore = create<NoteStore>((set) => ({
   isManagerOpen: false,
   isLoading: false,
 
-  // ── Load all notes from backend on app init ────────────────────────────────
   loadNotes: async () => {
     set({ isLoading: true })
     try {
@@ -50,7 +44,6 @@ export const useNoteStore = create<NoteStore>((set) => ({
     }
   },
 
-  // ── Pure UI state (no API call needed) ────────────────────────────────────
   setManagerOpen: (isOpen) => set({ isManagerOpen: isOpen }),
 
   openNote: (id) => set(state => ({
@@ -61,21 +54,26 @@ export const useNoteStore = create<NoteStore>((set) => ({
     notes: state.notes.map(n => n.id === id ? { ...n, isOpen: false } : n),
   })),
 
-  // ── CRUD — all changes go to PostgreSQL ───────────────────────────────────
-
   addNote: async () => {
+    // Show the notepad instantly with a temp ID — don't wait for the API
+    const tempId = `temp-${Date.now()}`
+    set(state => ({
+      notes: [{ id: tempId, title: 'NOTE', text: '', isOpen: true }, ...state.notes],
+    }))
     try {
       const created = await notesService.create({ title: 'NOTE', text: '' })
+      // Swap the temp ID for the real DB UUID
       set(state => ({
-        notes: [{ ...created, isOpen: true }, ...state.notes],
+        notes: state.notes.map(n => n.id === tempId ? { ...created, isOpen: true } : n),
       }))
     } catch (err) {
-      console.error('Failed to create note:', err)
+      console.error('Failed to save note to backend:', err)
+      // Remove the optimistic note so state stays consistent
+      set(state => ({ notes: state.notes.filter(n => n.id !== tempId) }))
     }
   },
 
   updateNote: async (id, text) => {
-    // Optimistic update
     set(state => ({
       notes: state.notes.map(n => n.id === id ? { ...n, text } : n),
     }))
@@ -87,7 +85,6 @@ export const useNoteStore = create<NoteStore>((set) => ({
   },
 
   updateNoteTitle: async (id, title) => {
-    // Optimistic update
     set(state => ({
       notes: state.notes.map(n => n.id === id ? { ...n, title } : n),
     }))
@@ -99,7 +96,6 @@ export const useNoteStore = create<NoteStore>((set) => ({
   },
 
   removeNote: async (id) => {
-    // Optimistic update — close + remove from list
     set(state => ({
       notes: state.notes.filter(n => n.id !== id),
     }))
