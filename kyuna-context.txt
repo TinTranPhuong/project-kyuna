@@ -69,22 +69,27 @@ backend/app/dependencies/database.py
 backend/app/main.py
 backend/app/models/base.py
 backend/app/models/chat.py
+backend/app/models/note.py
 backend/app/models/session.py
 backend/app/models/translator.py
 backend/app/models/user.py
 backend/app/routers/auth.py
 backend/app/routers/chat.py
+backend/app/routers/dashboard.py
+backend/app/routers/note.py
 backend/app/routers/sessions.py
 backend/app/routers/translator.py
 backend/app/routers/users.py
 backend/app/schemas/auth.py
 backend/app/schemas/chat.py
+backend/app/schemas/note.py
 backend/app/schemas/session.py
 backend/app/schemas/translator.py
 backend/app/schemas/user.py
 backend/app/services/auth_service.py
 backend/app/services/chat_service.py
 backend/app/services/file_service.py
+backend/app/services/note_service.py
 backend/app/services/session_service.py
 backend/app/services/translator_service.py
 backend/app/services/user_service.py
@@ -171,7 +176,9 @@ frontend/src/pages/TranslatorPage.tsx
 frontend/src/services/auth.service.ts
 frontend/src/services/chat.service.ts
 frontend/src/services/dashboard.service.ts
+frontend/src/services/notes.service.ts
 frontend/src/services/sessions.service.ts
+frontend/src/services/settings.service.ts
 frontend/src/services/translator.service.ts
 frontend/src/store/authStore.ts
 frontend/src/store/chatStore.ts
@@ -683,39 +690,6 @@ async def translate_image_vision(image_path: str, source_language: str, target_l
     yield {"status": "done", "regions": []}
 </file>
 
-<file path="ai_server/app/utils/prompt_loader.py">
-
-</file>
-
-<file path="backend/app/core/config.py">
-from typing import List, Union
-from pydantic import field_validator
-from pydantic_settings import BaseSettings
-
-class Settings(BaseSettings):
-    DATABASE_URL: str = "sqlite+aiosqlite:///./app.db"
-    SECRET_KEY: str
-    ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
-    AI_SERVER_URL: str = "http://localhost:8001"
-    UPLOAD_DIR: str = "./uploads"
-    MAX_UPLOAD_SIZE_MB: int = 100
-    ALLOWED_ORIGINS: Union[List[str], str] = ["http://localhost:5173"]
-    ENVIRONMENT: str = "development"
-    
-    @field_validator("ALLOWED_ORIGINS", mode="before")
-    @classmethod
-    def assemble_cors_origins(cls, v: Union[str, List[str]]) -> List[str]:
-        if isinstance(v, str) and not v.startswith("["):
-            return [i.strip() for i in v.split(",") if i.strip()]
-        return v
-    
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
-
-settings = Settings()
-</file>
-
 <file path="backend/app/core/limiter.py">
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -869,78 +843,6 @@ from app.core.database import get_db
 __all__ = ["get_db"]
 </file>
 
-<file path="backend/app/main.py">
-from contextlib import asynccontextmanager
-from pathlib import Path
-
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
-from slowapi import _rate_limit_exceeded_handler
-from app.core.limiter import limiter
-
-from app.core.config import settings
-from app.core.database import engine, Base
-from app.routers import auth, users, sessions, chat, translator
-
-# Lifespan: runs startup/shutdown logic
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Startup: create all DB tables
-    # Note: In production with Alembic, you might remove this and rely strictly on migrations.
-    # For dev scaffolding, this is perfectly fine.
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        
-    # Create upload directory if it doesn't exist
-    Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
-    
-    yield
-    
-    # Shutdown: close DB connections
-    await engine.dispose()
-
-
-# Rate limiter instance
-# limiter = Limiter(key_func=get_remote_address)
-
-# FastAPI application factory
-app = FastAPI(
-    title="Personal AI Website API",
-    version="1.0.0",
-    docs_url="/docs" if settings.ENVIRONMENT == "development" else None,
-    redoc_url=None,
-    lifespan=lifespan,
-)
-
-# Rate limiting setup
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
-# CORS configuration
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.ALLOWED_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Include all routers with /api/v1 prefix
-# Note: These will throw ModuleNotFound errors until we scaffold the router files
-app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
-app.include_router(users.router, prefix="/api/v1/users", tags=["users"])
-app.include_router(sessions.router, prefix="/api/v1/sessions", tags=["sessions"])
-app.include_router(chat.router, prefix="/api/v1/chat", tags=["chat"])
-app.include_router(translator.router, prefix="/api/v1/translate", tags=["translator"])
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint to verify the API is running."""
-    return {"status": "ok", "version": "1.0.0"}
-</file>
-
 <file path="backend/app/models/base.py">
 from app.core.database import Base
 from sqlalchemy.orm import mapped_column, Mapped
@@ -1037,12 +939,12 @@ class ChatMessage(Base):
     conversation: Mapped["ChatConversation"] = relationship("ChatConversation", back_populates="messages")
 </file>
 
-<file path="backend/app/models/session.py">
+<file path="backend/app/models/note.py">
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
-from sqlalchemy import String, Boolean, DateTime, ForeignKey, Text, Integer, CheckConstraint, func
+from sqlalchemy import String, Text, DateTime, ForeignKey, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -1050,136 +952,31 @@ from app.core.database import Base
 if TYPE_CHECKING:
     from app.models.user import User
 
-class PomodoroSession(Base):
-    __tablename__ = "pomodoro_sessions"
+
+class Note(Base):
+    __tablename__ = "notes"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), 
-        index=True, 
-        nullable=False
-    )
-    
-    session_type: Mapped[str] = mapped_column(String(20), nullable=False)
-    duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
-    completed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0", nullable=False)
-    
-    # Set by application when user clicks "Start"
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
-    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-    __table_args__ = (
-        CheckConstraint(
-            "session_type IN ('work', 'short_break', 'long_break')", 
-            name="chk_session_type"
-        ),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
     )
 
-    # ─── Relationships ────────────────────────────────────────────────────────
-    
-    user: Mapped["User"] = relationship("User", back_populates="pomodoro_sessions")
+    title: Mapped[str] = mapped_column(String(255), default="NOTE", server_default="NOTE")
+    text: Mapped[str] = mapped_column(Text, default="", server_default="")
 
+    # is_open is intentionally NOT stored — it is pure UI state.
+    # Notes always load as closed; the user opens them manually.
 
-class UserSettings(Base):
-    __tablename__ = "user_settings"
-
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), 
-        unique=True, 
-        nullable=False
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
     )
-    
-    theme: Mapped[str] = mapped_column(String(50), default="night-garden", server_default="night-garden")
-    font_size: Mapped[int] = mapped_column(Integer, default=14, server_default="14")
-    music_url: Mapped[str] = mapped_column(
-        Text, 
-        default="https://www.youtube.com/watch?v=jfKfPfyJRdk", 
-        server_default="https://www.youtube.com/watch?v=jfKfPfyJRdk"
-    )
-    
-    preferred_chat_model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    preferred_vision_model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    
-    pomodoro_work_minutes: Mapped[int] = mapped_column(Integer, default=25, server_default="25")
-    pomodoro_short_break: Mapped[int] = mapped_column(Integer, default=5, server_default="5")
-    pomodoro_long_break: Mapped[int] = mapped_column(Integer, default=15, server_default="15")
-    auto_start_breaks: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
-    notification_sound: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
-    
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), 
-        server_default=func.now(), 
-        onupdate=func.now()
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    # ─── Relationships ────────────────────────────────────────────────────────
-    
-    user: Mapped["User"] = relationship("User", back_populates="settings")
-</file>
-
-<file path="backend/app/models/user.py">
-import uuid
-from datetime import datetime
-from typing import TYPE_CHECKING, List, Optional
-
-from sqlalchemy import String, Boolean, DateTime, func
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-
-from app.core.database import Base
-
-if TYPE_CHECKING:
-    from app.models.session import PomodoroSession, UserSettings
-    from app.models.chat import ChatConversation
-    from app.models.translator import TranslationJob
-
-class User(Base):
-    __tablename__ = "users"
-
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
-    username: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
-    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
-    
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1", nullable=False)
-    is_verified: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0", nullable=False)
-    avatar_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), 
-        server_default=func.now(), 
-        onupdate=func.now()
-    )
-
-    # ─── Relationships ────────────────────────────────────────────────────────
-    
-    settings: Mapped[Optional["UserSettings"]] = relationship(
-        "UserSettings", 
-        back_populates="user", 
-        uselist=False, 
-        cascade="all, delete-orphan"
-    )
-    
-    pomodoro_sessions: Mapped[List["PomodoroSession"]] = relationship(
-        "PomodoroSession", 
-        back_populates="user", 
-        cascade="all, delete-orphan"
-    )
-    
-    conversations: Mapped[List["ChatConversation"]] = relationship(
-        "ChatConversation", 
-        back_populates="user", 
-        cascade="all, delete-orphan"
-    )
-    
-    translation_jobs: Mapped[List["TranslationJob"]] = relationship(
-        "TranslationJob", 
-        back_populates="user", 
-        cascade="all, delete-orphan"
-    )
+    user: Mapped["User"] = relationship("User", back_populates="notes")
 </file>
 
 <file path="backend/app/routers/auth.py">
@@ -1272,6 +1069,101 @@ async def refresh(data: RefreshRequest):
 async def get_me(current_user: User = Depends(get_current_user)):
     """Get the profile details of the currently authenticated user."""
     return current_user
+</file>
+
+<file path="backend/app/routers/dashboard.py">
+from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.database import get_db
+from app.dependencies.auth import get_current_user
+from app.models.user import User
+from app.services import session_service, translator_service
+
+router = APIRouter()
+
+
+@router.get("/stats")
+async def get_dashboard_stats(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Single endpoint that aggregates all dashboard data in one call.
+    Avoids multiple waterfall requests from DashboardPage on mount.
+    """
+    # Pomodoro stats (total focus, sessions, streak)
+    stats = await session_service.get_user_stats(db, current_user.id)
+
+    # Daily chart for the last 7 days
+    chart = await session_service.get_daily_chart_data(db, current_user.id, days=7)
+
+    # Total pages translated (count translation pages with status 'done')
+    total_translations = await translator_service.count_translated_pages(db, current_user.id)
+
+    return {
+        "total_focus_minutes":  stats["total_focus_minutes"],
+        "total_sessions":       stats["total_sessions"],
+        "sessions_today":       stats["sessions_today"],
+        "current_streak":       stats["current_streak"],
+        "longest_streak":       stats["longest_streak"],
+        "total_translations":   total_translations,
+        "daily_focus_chart":    chart,
+    }
+</file>
+
+<file path="backend/app/routers/note.py">
+from typing import List
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, status
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.database import get_db
+from app.dependencies.auth import get_current_user
+from app.models.user import User
+from app.schemas.note import NoteCreate, NoteUpdate, NoteResponse
+from app.services import note_service
+
+router = APIRouter()
+
+
+@router.get("", response_model=List[NoteResponse])
+async def list_notes(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return all notes for the current user, newest first."""
+    return await note_service.get_user_notes(db, current_user.id)
+
+
+@router.post("", response_model=NoteResponse, status_code=status.HTTP_201_CREATED)
+async def create_note(
+    data: NoteCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await note_service.create_note(db, current_user.id, data)
+
+
+@router.patch("/{note_id}", response_model=NoteResponse)
+async def update_note(
+    note_id: UUID,
+    data: NoteUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await note_service.update_note(db, current_user.id, note_id, data)
+
+
+@router.delete("/{note_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_note(
+    note_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await note_service.delete_note(db, current_user.id, note_id)
+    return None
 </file>
 
 <file path="backend/app/routers/sessions.py">
@@ -1445,6 +1337,35 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 </file>
 
+<file path="backend/app/schemas/note.py">
+from datetime import datetime
+from typing import Optional
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict
+
+
+class NoteCreate(BaseModel):
+    title: str = "NOTE"
+    text: str = ""
+
+
+class NoteUpdate(BaseModel):
+    title: Optional[str] = None
+    text: Optional[str] = None
+
+
+class NoteResponse(BaseModel):
+    id: UUID
+    user_id: UUID
+    title: str
+    text: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+</file>
+
 <file path="backend/app/schemas/session.py">
 from datetime import datetime
 from typing import List, Optional
@@ -1481,63 +1402,6 @@ class SessionStatsResponse(BaseModel):
     current_streak: int
     longest_streak: int
     chart_data: List[DailyChartPoint] = []
-</file>
-
-<file path="backend/app/schemas/user.py">
-from datetime import datetime
-from typing import Optional
-from uuid import UUID
-
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-
-
-class UpdateProfileRequest(BaseModel):
-    username: Optional[str] = Field(None, min_length=3, max_length=20, pattern=r"^[a-zA-Z0-9_]+$")
-
-
-class ChangePasswordRequest(BaseModel):
-    current_password: str
-    new_password: str = Field(min_length=8)
-
-    @field_validator("new_password")
-    @classmethod
-    def validate_password_complexity(cls, v: str) -> str:
-        if not any(char.isdigit() for char in v):
-            raise ValueError("Password must contain at least one digit")
-        if not any(char.isalpha() for char in v):
-            raise ValueError("Password must contain at least one letter")
-        return v
-
-
-class UserSettingsResponse(BaseModel):
-    id: UUID
-    user_id: UUID
-    theme: str
-    font_size: int
-    music_url: str
-    preferred_chat_model: Optional[str] = None
-    preferred_vision_model: Optional[str] = None
-    pomodoro_work_minutes: int
-    pomodoro_short_break: int
-    pomodoro_long_break: int
-    auto_start_breaks: bool
-    notification_sound: bool
-    updated_at: datetime
-
-    model_config = ConfigDict(from_attributes=True)
-
-
-class UpdateSettingsRequest(BaseModel):
-    theme: Optional[str] = None
-    font_size: Optional[int] = None
-    music_url: Optional[str] = None
-    preferred_chat_model: Optional[str] = None
-    preferred_vision_model: Optional[str] = None
-    pomodoro_work_minutes: Optional[int] = None
-    pomodoro_short_break: Optional[int] = None
-    pomodoro_long_break: Optional[int] = None
-    auto_start_breaks: Optional[bool] = None
-    notification_sound: Optional[bool] = None
 </file>
 
 <file path="backend/app/services/auth_service.py">
@@ -1735,6 +1599,53 @@ def delete_job_files(user_id: UUID, job_id: UUID) -> None:
         shutil.rmtree(job_dir, ignore_errors=True)
 </file>
 
+<file path="backend/app/services/note_service.py">
+from uuid import UUID
+
+from fastapi import HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, desc
+
+from app.models.note import Note
+from app.schemas.note import NoteCreate, NoteUpdate
+
+
+async def get_user_notes(db: AsyncSession, user_id: UUID) -> list[Note]:
+    stmt = select(Note).where(Note.user_id == user_id).order_by(desc(Note.updated_at))
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def create_note(db: AsyncSession, user_id: UUID, data: NoteCreate) -> Note:
+    note = Note(user_id=user_id, title=data.title, text=data.text)
+    db.add(note)
+    await db.commit()
+    await db.refresh(note)
+    return note
+
+
+async def update_note(db: AsyncSession, user_id: UUID, note_id: UUID, data: NoteUpdate) -> Note:
+    note = await db.get(Note, note_id)
+    if not note or note.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
+
+    update_data = data.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(note, key, value)
+
+    await db.commit()
+    await db.refresh(note)
+    return note
+
+
+async def delete_note(db: AsyncSession, user_id: UUID, note_id: UUID) -> None:
+    note = await db.get(Note, note_id)
+    if not note or note.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
+    await db.delete(note)
+    await db.commit()
+</file>
+
 <file path="backend/app/services/session_service.py">
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict
@@ -1864,106 +1775,6 @@ async def get_daily_chart_data(db: AsyncSession, user_id: str, days: int) -> Lis
         })
 
     return chart_data
-</file>
-
-<file path="backend/app/services/user_service.py">
-import shutil
-from pathlib import Path
-
-from fastapi import HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
-
-from app.models.user import User
-from app.models.session import UserSettings
-from app.schemas.user import UpdateProfileRequest, ChangePasswordRequest, UpdateSettingsRequest
-from app.core.security import hash_password, verify_password
-from app.core.config import settings
-
-
-async def update_user_profile(db: AsyncSession, current_user: User, data: UpdateProfileRequest) -> User:
-    """Updates the user's profile details."""
-    if data.username is not None:
-        current_user.username = data.username
-        
-    try:
-        await db.commit()
-        await db.refresh(current_user)
-    except IntegrityError:
-        await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, 
-            detail="Username is already taken"
-        )
-        
-    return current_user
-
-
-async def change_user_password(db: AsyncSession, current_user: User, data: ChangePasswordRequest) -> None:
-    """Validates the current password and sets a new one."""
-    if not verify_password(data.current_password, current_user.hashed_password):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, 
-            detail="Incorrect current password"
-        )
-        
-    current_user.hashed_password = hash_password(data.new_password)
-    await db.commit()
-
-
-async def delete_user_account(db: AsyncSession, user_id: str) -> None:
-    """Hard deletes a user, their database cascades, and their physical files."""
-    stmt = select(User).where(User.id == user_id)
-    result = await db.execute(stmt)
-    user = result.scalar_one_or_none()
-    
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, 
-            detail="User not found"
-        )
-
-    # Delete physical translation upload files
-    user_dir = Path(settings.UPLOAD_DIR) / str(user_id)
-    if user_dir.exists() and user_dir.is_dir():
-        shutil.rmtree(user_dir, ignore_errors=True)
-
-    # Delete DB record (relies on SQLAlchemy/Alembic ON DELETE CASCADE for related rows)
-    await db.delete(user)
-    await db.commit()
-
-
-async def get_user_settings(db: AsyncSession, user_id: str) -> UserSettings:
-    """Fetches user settings, creating defaults if missing."""
-    stmt = select(UserSettings).where(UserSettings.user_id == user_id)
-    result = await db.execute(stmt)
-    settings_obj = result.scalar_one_or_none()
-    
-    # Fallback in case settings were somehow missed during registration
-    if not settings_obj:
-        settings_obj = UserSettings(user_id=user_id)
-        db.add(settings_obj)
-        await db.commit()
-        await db.refresh(settings_obj)
-        
-    return settings_obj
-
-
-async def update_user_settings(db: AsyncSession, user_id: str, data: UpdateSettingsRequest) -> UserSettings:
-    """Applies a partial update to user settings."""
-    settings_obj = await get_user_settings(db, user_id)
-    
-    # Exclude unset fields so we only update what the client actually sent
-    update_data = data.model_dump(exclude_unset=True)
-    
-    for key, value in update_data.items():
-        setattr(settings_obj, key, value)
-        
-    await db.commit()
-    await db.refresh(settings_obj)
-    
-    return settings_obj
 </file>
 
 <file path="backend/app/utils/image_utils.py">
@@ -6161,6 +5972,49 @@ export const dashboardService = {
 }
 </file>
 
+<file path="frontend/src/services/notes.service.ts">
+import axiosInstance from '@/lib/axios'
+
+export interface NotePayload {
+  title?: string
+  text?: string
+}
+
+export interface NoteResponse {
+  id: string
+  user_id: string
+  title: string
+  text: string
+  created_at: string
+  updated_at: string
+}
+
+export const notesService = {
+
+  getAll: async (): Promise<NoteResponse[]> => {
+    const res = await axiosInstance.get<NoteResponse[]>('/api/v1/notes')
+    return res.data
+  },
+
+  create: async (data: NotePayload = {}): Promise<NoteResponse> => {
+    const res = await axiosInstance.post<NoteResponse>('/api/v1/notes', {
+      title: data.title ?? 'NOTE',
+      text:  data.text  ?? '',
+    })
+    return res.data
+  },
+
+  update: async (id: string, data: NotePayload): Promise<NoteResponse> => {
+    const res = await axiosInstance.patch<NoteResponse>(`/api/v1/notes/${id}`, data)
+    return res.data
+  },
+
+  delete: async (id: string): Promise<void> => {
+    await axiosInstance.delete(`/api/v1/notes/${id}`)
+  },
+}
+</file>
+
 <file path="frontend/src/services/sessions.service.ts">
 import axiosInstance from '@/lib/axios'
 import type { SessionStats } from '@/types/timer.types'
@@ -6247,57 +6101,39 @@ export const sessionsService = {
 }
 </file>
 
-<file path="frontend/src/store/noteStore.ts">
-import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+<file path="frontend/src/services/settings.service.ts">
+import axiosInstance from '@/lib/axios'
+import type { MusicGroup } from '@/store/settingsStore'
 
-export interface Note {
-  id: string;
-  title: string;
-  text: string;
-  isOpen: boolean; // Tracks if the floating window is currently visible
+export interface BackendSettings {
+  theme: string
+  font_size: number
+  custom_wallpaper: string | null
+  music_url: string
+  music_groups: MusicGroup[] | null
+  preferred_chat_model: string | null
+  preferred_vision_model: string | null
+  pomodoro_work_minutes: number
+  pomodoro_short_break: number
+  pomodoro_long_break: number
+  auto_start_breaks: boolean
+  notification_sound: boolean
 }
 
-interface NoteStore {
-  notes: Note[];
-  isManagerOpen: boolean;
-  setManagerOpen: (isOpen: boolean) => void;
-  addNote: () => void;
-  updateNote: (id: string, text: string) => void;
-  updateNoteTitle: (id: string, title: string) => void;
-  closeNote: (id: string) => void; // Hides the note, but keeps it saved
-  openNote: (id: string) => void;  // Shows the hidden note
-  removeNote: (id: string) => void; // Actually deletes the note permanently
-}
+export type SettingsUpdate = Partial<BackendSettings>
 
-export const useNoteStore = create<NoteStore>()(
-  persist(
-    (set) => ({
-      notes: [],
-      isManagerOpen: false,
-      setManagerOpen: (isOpen) => set({ isManagerOpen: isOpen }),
-      addNote: () => set((state) => ({
-        notes: [...state.notes, { id: Date.now().toString(), title: 'NOTE', text: '', isOpen: true }]
-      })),
-      updateNoteTitle: (id, title) => set((state) => ({
-        notes: state.notes.map(n => n.id === id ? { ...n, title } : n)
-      })),
-      updateNote: (id, text) => set((state) => ({
-        notes: state.notes.map(n => n.id === id ? { ...n, text } : n)
-      })),
-      closeNote: (id) => set((state) => ({
-        notes: state.notes.map(n => n.id === id ? { ...n, isOpen: false } : n)
-      })),
-      openNote: (id) => set((state) => ({
-        notes: state.notes.map(n => n.id === id ? { ...n, isOpen: true } : n)
-      })),
-      removeNote: (id) => set((state) => ({
-        notes: state.notes.filter(n => n.id !== id)
-      })),
-    }),
-    { name: 'kyuna-notes' }
-  )
-);
+export const settingsService = {
+
+  get: async (): Promise<BackendSettings> => {
+    const res = await axiosInstance.get<BackendSettings>('/api/v1/users/me/settings')
+    return res.data
+  },
+
+  update: async (data: SettingsUpdate): Promise<BackendSettings> => {
+    const res = await axiosInstance.patch<BackendSettings>('/api/v1/users/me/settings', data)
+    return res.data
+  },
+}
 </file>
 
 <file path="frontend/src/store/widgetStore.ts">
@@ -6473,46 +6309,6 @@ export interface SessionStats {
   sessions_today: number
   current_streak: number
   longest_streak: number
-}
-</file>
-
-<file path="frontend/src/vite-env.d.ts">
-/// <reference types="vite/client" />
-
-interface ImportMetaEnv {
-  readonly VITE_API_URL: string;
-  // Add other env variables here as you create them
-}
-
-interface ImportMeta {
-  readonly env: ImportMetaEnv;
-}
-
-/**
- * Radix UI Module Declarations
- * Fixes error in image_14b5fe.png
- */
-declare module '@radix-ui/react-dropdown-menu' {
-  import * as React from 'react';
-  export const Root: React.FC<any>;
-  export const Trigger: React.ForwardRefExoticComponent<any>;
-  export const Portal: React.FC<any>;
-  export const Content: React.ForwardRefExoticComponent<any>;
-  export const Label: React.FC<any>;
-  export const Item: React.ForwardRefExoticComponent<any>;
-  export const Separator: React.FC<any>;
-}
-
-/**
- * React Syntax Highlighter Declarations
- * Fixes error in image_157cb5.png
- */
-declare module 'react-syntax-highlighter' {
-  export const Prism: any;
-}
-
-declare module 'react-syntax-highlighter/dist/esm/styles/prism' {
-  export const oneDark: any;
 }
 </file>
 
@@ -7403,39 +7199,262 @@ async def translate_image_file(image_path: str, source_language: str, target_lan
     }
 </file>
 
-<file path="backend/app/core/database.py">
-from typing import AsyncGenerator
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy.orm import DeclarativeBase
+<file path="ai_server/app/utils/prompt_loader.py">
+import os
+from pathlib import Path
+
+# Define the directory where prompt templates are stored
+PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
+
+def load_prompt_for_model(model_name: str, prompt_type: str = "chat") -> str:
+    """
+    Loads a prompt template for a specific model or falls back to default.
+    
+    Args:
+        model_name (str): The name of the model (e.g., "Qwen3.5-35B").
+        prompt_type (str): The type of prompt (e.g., "chat", "translation").
+        
+    Returns:
+        str: The content of the prompt template.
+    """
+    # Normalize model name to finding matching files (simple logic for now)
+    # You can expand this logic to map specific filenames to model families
+    
+    filename = "default.txt"
+    
+    if "qwen" in model_name.lower():
+        filename = "qwen_chat.txt"
+    elif "mistral" in model_name.lower():
+        filename = "mistral_chat.txt"
+    
+    # Construct full path
+    prompt_path = PROMPTS_DIR / filename
+    
+    # Fallback if specific file doesn't exist
+    if not prompt_path.exists():
+        # Fallback to a generic default if the specific one is missing
+        return "System: You are a helpful AI assistant.\nUser: {input}\nAssistant:"
+
+    try:
+        with open(prompt_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception as e:
+        print(f"Error loading prompt {filename}: {e}")
+        return "System: You are a helpful AI assistant.\nUser: {input}\nAssistant:"
+
+def load_system_prompt() -> str:
+    """
+    Simple helper to just get the base system prompt if needed.
+    """
+    return "You are Kyuna, an advanced AI assistant optimized for tech leads."
+</file>
+
+<file path="backend/app/core/config.py">
+from pathlib import Path
+from typing import List, Union
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Resolve .env relative to THIS file, not the working directory.
+# backend/app/core/config.py → backend/.env
+_ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
+
+
+class Settings(BaseSettings):
+    # ── Database ──────────────────────────────────────────────────────────────
+    DATABASE_URL: str = "postgresql+asyncpg://kyuna:password@localhost:5432/kyuna_db"
+
+    # ── Connection Pool (PostgreSQL only — ignored for SQLite) ────────────────
+    DB_POOL_SIZE: int = 5
+    DB_MAX_OVERFLOW: int = 15
+    DB_POOL_TIMEOUT: int = 30
+    DB_POOL_RECYCLE: int = 1800
+
+    # ── Auth ──────────────────────────────────────────────────────────────────
+    SECRET_KEY: str = "CHANGE_ME_IN_ENV"
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+
+    # ── Services ──────────────────────────────────────────────────────────────
+    AI_SERVER_URL: str = "http://localhost:8001"
+    UPLOAD_DIR: str = "./uploads"
+    MAX_UPLOAD_SIZE_MB: int = 100
+
+    # ── CORS ──────────────────────────────────────────────────────────────────
+    ALLOWED_ORIGINS: Union[List[str], str] = ["http://localhost:5173"]
+
+    # ── App ───────────────────────────────────────────────────────────────────
+    ENVIRONMENT: str = "development"
+
+    @field_validator("ALLOWED_ORIGINS", mode="before")
+    @classmethod
+    def assemble_cors_origins(cls, v: Union[str, List[str]]) -> List[str]:
+        if isinstance(v, str) and not v.startswith("["):
+            return [i.strip() for i in v.split(",") if i.strip()]
+        return v
+
+    model_config = SettingsConfigDict(
+        env_file=str(_ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
+settings = Settings()
+</file>
+
+<file path="backend/app/main.py">
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from slowapi.errors import RateLimitExceeded
+from slowapi import _rate_limit_exceeded_handler
+from app.core.limiter import limiter
 
 from app.core.config import settings
+from app.core.database import engine
+from app.routers import auth, users, sessions, chat, translator, notes, dashboard
 
-engine = create_async_engine(
-    settings.DATABASE_URL,
-    echo=False,  
-    future=True,
-    pool_pre_ping=True                        # test connections before use
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # ── Startup ───────────────────────────────────────────────────────────────
+    # Schema is fully managed by Alembic migrations.
+    # NEVER call Base.metadata.create_all here in production.
+    # Before starting: run  →  alembic upgrade head
+    Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
+
+    yield
+
+    # ── Shutdown ──────────────────────────────────────────────────────────────
+    await engine.dispose()
+
+
+app = FastAPI(
+    title="Kyuna API",
+    version="1.0.0",
+    docs_url="/docs" if settings.ENVIRONMENT == "development" else None,
+    redoc_url=None,
+    lifespan=lifespan,
 )
 
-AsyncSessionLocal = async_sessionmaker(
-    bind=engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
-    autoflush=False,
+# Rate limiting
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-class Base(DeclarativeBase):
-    pass
+# Routers
+app.include_router(auth.router,       prefix="/api/v1/auth",      tags=["auth"])
+app.include_router(users.router,      prefix="/api/v1/users",     tags=["users"])
+app.include_router(sessions.router,   prefix="/api/v1/sessions",  tags=["sessions"])
+app.include_router(chat.router,       prefix="/api/v1/chat",      tags=["chat"])
+app.include_router(translator.router,  prefix="/api/v1/translate",  tags=["translator"])
+app.include_router(notes.router,       prefix="/api/v1/notes",      tags=["notes"])
+app.include_router(dashboard.router,   prefix="/api/v1/dashboard",  tags=["dashboard"])
 
-# Dependency for FastAPI routes — yields a session, auto-commits or rolls back
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    async with AsyncSessionLocal() as session:
-        try:
-            yield session
-            await session.commit()
-        except Exception:
-            await session.close()
-            raise
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "version": "1.0.0"}
+</file>
+
+<file path="backend/app/models/session.py">
+import uuid
+from datetime import datetime
+from typing import TYPE_CHECKING, Optional
+
+from sqlalchemy import String, Boolean, DateTime, ForeignKey, Text, Integer, CheckConstraint, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.core.database import Base
+
+if TYPE_CHECKING:
+    from app.models.user import User
+
+
+class PomodoroSession(Base):
+    __tablename__ = "pomodoro_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    session_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    completed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0", nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "session_type IN ('work', 'short_break', 'long_break')",
+            name="chk_session_type",
+        ),
+    )
+
+    user: Mapped["User"] = relationship("User", back_populates="pomodoro_sessions")
+
+
+class UserSettings(Base):
+    __tablename__ = "user_settings"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        unique=True,
+        nullable=False,
+    )
+
+    # ── Appearance ────────────────────────────────────────────────────────────
+    theme: Mapped[str] = mapped_column(String(50), default="night-garden", server_default="night-garden")
+    font_size: Mapped[int] = mapped_column(Integer, default=14, server_default="14")
+
+    # Custom wallpaper stored as a base64 data URL or a hosted image URL.
+    # NULL means no custom wallpaper (use the default theme video).
+    custom_wallpaper: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # ── Music ─────────────────────────────────────────────────────────────────
+    music_url: Mapped[str] = mapped_column(
+        Text,
+        default="https://www.youtube.com/watch?v=jfKfPfyJRdk",
+        server_default="https://www.youtube.com/watch?v=jfKfPfyJRdk",
+    )
+    # Stored as JSON text: [{"id":"...","name":"...","links":[...]}]
+    # NULL means the frontend will use its own built-in defaults.
+    music_groups: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # ── AI models ─────────────────────────────────────────────────────────────
+    preferred_chat_model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    preferred_vision_model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    # ── Pomodoro ──────────────────────────────────────────────────────────────
+    pomodoro_work_minutes: Mapped[int] = mapped_column(Integer, default=25, server_default="25")
+    pomodoro_short_break: Mapped[int] = mapped_column(Integer, default=5, server_default="5")
+    pomodoro_long_break: Mapped[int] = mapped_column(Integer, default=15, server_default="15")
+    auto_start_breaks: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    notification_sound: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+
+    # ── Timestamps ────────────────────────────────────────────────────────────
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    user: Mapped["User"] = relationship("User", back_populates="settings")
 </file>
 
 <file path="backend/app/models/translator.py">
@@ -7554,6 +7573,59 @@ class TranslationPage(Base):
     # ─── Relationships ────────────────────────────────────────────────────────
     
     job: Mapped["TranslationJob"] = relationship("TranslationJob", back_populates="pages")
+</file>
+
+<file path="backend/app/models/user.py">
+import uuid
+from datetime import datetime
+from typing import TYPE_CHECKING, List, Optional
+
+from sqlalchemy import String, Boolean, DateTime, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.core.database import Base
+
+if TYPE_CHECKING:
+    from app.models.session import PomodoroSession, UserSettings
+    from app.models.chat import ChatConversation
+    from app.models.translator import TranslationJob
+    from app.models.note import Note
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    username: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
+    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1", nullable=False)
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0", nullable=False)
+    avatar_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # ── Relationships ─────────────────────────────────────────────────────────
+
+    settings: Mapped[Optional["UserSettings"]] = relationship(
+        "UserSettings", back_populates="user", uselist=False, cascade="all, delete-orphan"
+    )
+    pomodoro_sessions: Mapped[List["PomodoroSession"]] = relationship(
+        "PomodoroSession", back_populates="user", cascade="all, delete-orphan"
+    )
+    conversations: Mapped[List["ChatConversation"]] = relationship(
+        "ChatConversation", back_populates="user", cascade="all, delete-orphan"
+    )
+    translation_jobs: Mapped[List["TranslationJob"]] = relationship(
+        "TranslationJob", back_populates="user", cascade="all, delete-orphan"
+    )
+    notes: Mapped[List["Note"]] = relationship(
+        "Note", back_populates="user", cascade="all, delete-orphan"
+    )
 </file>
 
 <file path="backend/app/routers/chat.py">
@@ -7727,149 +7799,165 @@ class JobDetailResponse(JobResponse):
     model_config = ConfigDict(from_attributes=True)
 </file>
 
-<file path="frontend/src/components/chat/ChatMessage.tsx">
-import { useState, memo } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { Copy, Check, User, Bot } from 'lucide-react';
-import { cn, timeAgo } from '@/lib/utils';
+<file path="backend/app/schemas/user.py">
+import json
+from datetime import datetime
+from typing import Any, List, Optional
+from uuid import UUID
 
-interface ChatMessageProps {
-  message: {
-    id: string;
-    role: 'user' | 'assistant' | 'system';
-    content: string;
-    timestamp: string; 
-    tokens_used?: number | null;
-  };
-  isStreaming?: boolean;
-}
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-export const ChatMessage = memo(({ message, isStreaming }: ChatMessageProps) => {
-  const isUser = message.role === 'user';
-  const [copied, setCopied] = useState(false);
 
-  const handleCopy = (code: string) => {
-    navigator.clipboard.writeText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+class UpdateProfileRequest(BaseModel):
+    username: Optional[str] = Field(None, min_length=3, max_length=20, pattern=r"^[a-zA-Z0-9_]+$")
 
-  return (
-    <div className={cn(
-      "flex w-full mb-8 group animate-in fade-in slide-in-from-bottom-2", // Increased bottom margin between messages
-      isUser ? "justify-end" : "justify-start"
-    )}>
-      <div className={cn(
-        "flex max-w-[90%] md:max-w-[80%] gap-4", // Slightly wider bubbles for better reading, more gap
-        isUser ? "flex-row-reverse" : "flex-row"
-      )}>
-        
-        {/* Avatar */}
-        <div className={cn(
-          "w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-1 shadow-md",
-          isUser ? "bg-primary-500/80 backdrop-blur-md" : "bg-black/40 backdrop-blur-md border border-white/10"
-        )}>
-          {isUser ? <User size={16} className="text-white" /> : <Bot size={18} className="text-primary-400" />}
-        </div>
 
-        {/* Content Bubble */}
-        <div className="flex flex-col space-y-2 min-w-0">
-          <div className={cn(
-            "p-4 md:p-5 rounded-2xl text-[15px] leading-relaxed shadow-xl", // Increased padding (p-5), slightly larger text
-            isUser 
-              ? "bg-primary-600/80 backdrop-blur-md text-white rounded-tr-none shadow-primary-900/20" 
-              : "bg-black/40 backdrop-blur-md border border-white/10 text-white/90 rounded-tl-none"
-          )}>
-            {isUser ? (
-              <p className="whitespace-pre-wrap">{message.content}</p>
-            ) : (
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                components={{
-                  // --- TYPOGRAPHY SPACING RULES ---
-                  p: ({ children }) => <p className="mb-4 last:mb-0 leading-relaxed text-white/85">{children}</p>,
-                  ul: ({ children }) => <ul className="mb-4 pl-6 space-y-2 list-disc marker:text-white/30">{children}</ul>,
-                  ol: ({ children }) => <ol className="mb-4 pl-6 space-y-2 list-decimal marker:text-white/30">{children}</ol>,
-                  li: ({ children }) => <li className="pl-1 text-white/85">{children}</li>,
-                  h1: ({ children }) => <h1 className="text-2xl font-bold mb-4 mt-6 text-white">{children}</h1>,
-                  h2: ({ children }) => <h2 className="text-xl font-bold mb-3 mt-5 text-white">{children}</h2>,
-                  h3: ({ children }) => <h3 className="text-lg font-semibold mb-3 mt-4 text-white">{children}</h3>,
-                  strong: ({ children }) => <strong className="font-bold text-white">{children}</strong>,
-                  blockquote: ({ children }) => <blockquote className="border-l-4 border-primary-500/50 pl-4 py-2 my-4 bg-black/20 rounded-r-lg italic text-white/70">{children}</blockquote>,
-                  
-                  // --- CODE BLOCKS ---
-                  code({ node, inline, className, children, ...props }: any) {
-                    const match = /language-(\w+)/.exec(className || '');
-                    const codeString = String(children).replace(/\n$/, '');
-                    
-                    if (!inline && match) {
-                      return (
-                        <div className="relative my-6 rounded-lg overflow-hidden border border-white/10 group/code">
-                          <div className="flex items-center justify-between px-4 py-2 bg-black/60 border-b border-white/5 backdrop-blur-md">
-                            <span className="text-[10px] font-mono text-white/50 uppercase tracking-widest">
-                              {match[1]}
-                            </span>
-                            <button
-                              onClick={() => handleCopy(codeString)}
-                              className="text-white/40 hover:text-white transition-colors"
-                            >
-                              {copied ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
-                            </button>
-                          </div>
-                          <SyntaxHighlighter
-                            style={oneDark}
-                            language={match[1]}
-                            PreTag="div"
-                            customStyle={{ margin: 0, padding: '1rem', background: 'rgba(0,0,0,0.4)', fontSize: '13px' }}
-                            {...props}
-                          >
-                            {codeString}
-                          </SyntaxHighlighter>
-                        </div>
-                      );
-                    }
-                    return (
-                      <code className="bg-white/10 px-1.5 py-0.5 rounded text-primary-300 font-mono text-[13px]" {...props}>
-                        {children}
-                      </code>
-                    );
-                  }
-                }}
-              >
-                {`${message.content}${isStreaming ? '▍' : ''}`}
-              </ReactMarkdown>
-            )}
-          </div>
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8)
 
-          {/* Metadata Footer */}
-          <div className={cn(
-            "flex items-center gap-3 px-1 transition-opacity opacity-0 group-hover:opacity-100",
-            isUser ? "flex-row-reverse" : "flex-row"
-          )}>
-            <span className="text-[10px] text-white/30 font-medium">
-              {timeAgo(message.timestamp)}
-            </span>
-            {!isUser && message.tokens_used && (
-              <span className="text-[10px] text-primary-500/50 font-mono">
-                {message.tokens_used} tokens
-              </span>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}, (prevProps, nextProps) => {
-  return (
-    prevProps.message.content === nextProps.message.content &&
-    prevProps.isStreaming === nextProps.isStreaming
-  );
-});
+    @field_validator("new_password")
+    @classmethod
+    def validate_password_complexity(cls, v: str) -> str:
+        if not any(char.isdigit() for char in v):
+            raise ValueError("Password must contain at least one digit")
+        if not any(char.isalpha() for char in v):
+            raise ValueError("Password must contain at least one letter")
+        return v
 
-export default ChatMessage;
+
+class UserSettingsResponse(BaseModel):
+    id: UUID
+    user_id: UUID
+
+    # Appearance
+    theme: str
+    font_size: int
+    custom_wallpaper: Optional[str] = None
+
+    # Music
+    music_url: str
+    # Stored as JSON text in DB — deserialized to list here
+    music_groups: Optional[List[Any]] = None
+
+    # AI models
+    preferred_chat_model: Optional[str] = None
+    preferred_vision_model: Optional[str] = None
+
+    # Pomodoro
+    pomodoro_work_minutes: int
+    pomodoro_short_break: int
+    pomodoro_long_break: int
+    auto_start_breaks: bool
+    notification_sound: bool
+
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("music_groups", mode="before")
+    @classmethod
+    def parse_music_groups(cls, v: Any) -> Optional[List]:
+        """Deserialize JSON text from DB into a Python list."""
+        if v is None:
+            return None
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except (json.JSONDecodeError, ValueError):
+                return None
+        return v
+
+
+class UpdateSettingsRequest(BaseModel):
+    theme: Optional[str] = None
+    font_size: Optional[int] = None
+    custom_wallpaper: Optional[str] = None   # base64 data URL or hosted URL
+    music_url: Optional[str] = None
+    music_groups: Optional[List[Any]] = None  # serialized to JSON text in service
+    preferred_chat_model: Optional[str] = None
+    preferred_vision_model: Optional[str] = None
+    pomodoro_work_minutes: Optional[int] = None
+    pomodoro_short_break: Optional[int] = None
+    pomodoro_long_break: Optional[int] = None
+    auto_start_breaks: Optional[bool] = None
+    notification_sound: Optional[bool] = None
+</file>
+
+<file path="backend/app/services/user_service.py">
+import json
+import shutil
+from pathlib import Path
+
+from fastapi import HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+
+from app.models.user import User
+from app.models.session import UserSettings
+from app.schemas.user import UpdateProfileRequest, ChangePasswordRequest, UpdateSettingsRequest
+from app.core.security import hash_password, verify_password
+from app.core.config import settings
+
+
+async def update_user_profile(db: AsyncSession, current_user: User, data: UpdateProfileRequest) -> User:
+    if data.username is not None:
+        current_user.username = data.username
+    try:
+        await db.commit()
+        await db.refresh(current_user)
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Username is already taken")
+    return current_user
+
+
+async def change_user_password(db: AsyncSession, current_user: User, data: ChangePasswordRequest) -> None:
+    if not verify_password(data.current_password, current_user.hashed_password):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Incorrect current password")
+    current_user.hashed_password = hash_password(data.new_password)
+    await db.commit()
+
+
+async def delete_user_account(db: AsyncSession, user_id: str) -> None:
+    stmt = select(User).where(User.id == user_id)
+    result = await db.execute(stmt)
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    user_dir = Path(settings.UPLOAD_DIR) / str(user_id)
+    if user_dir.exists() and user_dir.is_dir():
+        shutil.rmtree(user_dir, ignore_errors=True)
+    await db.delete(user)
+    await db.commit()
+
+
+async def get_user_settings(db: AsyncSession, user_id: str) -> UserSettings:
+    stmt = select(UserSettings).where(UserSettings.user_id == user_id)
+    result = await db.execute(stmt)
+    settings_obj = result.scalar_one_or_none()
+    if not settings_obj:
+        settings_obj = UserSettings(user_id=user_id)
+        db.add(settings_obj)
+        await db.commit()
+        await db.refresh(settings_obj)
+    return settings_obj
+
+
+async def update_user_settings(db: AsyncSession, user_id: str, data: UpdateSettingsRequest) -> UserSettings:
+    settings_obj = await get_user_settings(db, user_id)
+    update_data = data.model_dump(exclude_unset=True)
+
+    for key, value in update_data.items():
+        # music_groups is a list in the request but stored as JSON text in the DB
+        if key == "music_groups" and value is not None:
+            value = json.dumps(value, ensure_ascii=False)
+        setattr(settings_obj, key, value)
+
+    await db.commit()
+    await db.refresh(settings_obj)
+    return settings_obj
 </file>
 
 <file path="frontend/src/components/chat/ConversationList.tsx">
@@ -10050,131 +10138,119 @@ export const translatorService = {
 }
 </file>
 
-<file path="frontend/src/store/authStore.ts">
+<file path="frontend/src/store/noteStore.ts">
 import { create } from 'zustand'
-import { persist, createJSONStorage } from 'zustand/middleware'
-import { authService } from '@/services/auth.service'
-import type { User } from '@/types/auth.types'
+import { notesService } from '@/services/notes.service'
 
-// Re-export so other stores can import User from here if needed
-export type { User }
-
-// ─── State Interface ──────────────────────────────────────────────────────────
-
-interface AuthState {
-  user: User | null
-  token: string | null
-  refreshToken: string | null
-  isLoggedIn: boolean
-  isInitialized: boolean  // stays false until initialize() finishes its first run
-
-  // Actions
-  initialize: () => Promise<void>
-  login: (user: User, token: string, refreshToken: string) => void
-  logout: () => Promise<void>
-  setUser: (user: User) => void
-  updateToken: (token: string) => void  // called by axios interceptor on silent refresh
+// is_open is pure UI state — not stored in the DB.
+// Notes always load as closed; users open them from the manager.
+export interface Note {
+  id: string
+  title: string
+  text: string
+  isOpen: boolean
 }
 
-// ─── Store ────────────────────────────────────────────────────────────────────
+interface NoteStore {
+  notes: Note[]
+  isManagerOpen: boolean
+  isLoading: boolean
 
-export const useAuthStore = create<AuthState>()(
-  persist(
-    (set, get) => ({
-      user: null,
-      token: null,
-      refreshToken: null,
-      isLoggedIn: false,
-      isInitialized: false,
+  // Lifecycle
+  loadNotes: () => Promise<void>
 
-      /**
-       * Called once in main.tsx / App.tsx on mount.
-       * Reads the persisted token from localStorage and validates it against
-       * the backend. Sets isInitialized = true when done regardless of outcome,
-       * so ProtectedRoute can stop showing the loading spinner.
-       */
-      initialize: async () => {
-        const { token } = get()
+  // UI
+  setManagerOpen: (isOpen: boolean) => void
+  openNote: (id: string) => void
+  closeNote: (id: string) => void
 
-        if (!token) {
-          set({ isInitialized: true, isLoggedIn: false })
-          return
-        }
+  // CRUD (synced to PostgreSQL)
+  addNote: () => Promise<void>
+  updateNote: (id: string, text: string) => Promise<void>
+  updateNoteTitle: (id: string, title: string) => Promise<void>
+  removeNote: (id: string) => Promise<void>
+}
 
-        try {
-          const userData = await authService.getMe()
-          set({ user: userData, isLoggedIn: true })
-        } catch {
-          // Token is invalid or expired — wipe state so user must log in again
-          set({ user: null, token: null, refreshToken: null, isLoggedIn: false })
-        } finally {
-          set({ isInitialized: true })
-        }
-      },
+export const useNoteStore = create<NoteStore>((set) => ({
+  notes: [],
+  isManagerOpen: false,
+  isLoading: false,
 
-      /**
-       * Called by LoginPage and RegisterPage on successful API response.
-       * Sets all auth state and marks the session as initialized.
-       */
-      login: (user, token, refreshToken) => {
-        set({
-          user,
-          token,
-          refreshToken,
-          isLoggedIn: true,
-          isInitialized: true,
-        })
-      },
-
-      /**
-       * Calls the backend to invalidate the refresh token, then wipes all
-       * local state regardless of whether the backend call succeeded.
-       * The persist middleware will automatically sync the cleared state to
-       * localStorage — no need to call localStorage.removeItem manually.
-       */
-      logout: async () => {
-        try {
-          await authService.logout()
-        } catch {
-          // Backend logout failed (e.g. refresh token already expired).
-          // This is non-fatal — we still clear local state.
-          console.warn('Backend logout failed; clearing local state anyway.')
-        } finally {
-          set({
-            user: null,
-            token: null,
-            refreshToken: null,
-            isLoggedIn: false,
-          })
-        }
-      },
-
-      /** Used by SettingsPage after a successful profile update. */
-      setUser: (user) => set({ user }),
-
-      /**
-       * Called by the axios response interceptor after a successful
-       * silent token refresh. Updates the token without touching anything else.
-       */
-      updateToken: (token) => set({ token }),
-    }),
-    {
-      name: 'luna-auth-storage',
-      storage: createJSONStorage(() => localStorage),
-      /**
-       * Only persist the fields needed to restore a session across page loads.
-       * isInitialized is intentionally excluded — it must always start as false
-       * so initialize() runs its validation check on every app load.
-       */
-      partialize: (state) => ({
-        user:         state.user,
-        token:        state.token,
-        refreshToken: state.refreshToken,
-        isLoggedIn:   state.isLoggedIn,
-      }),
+  // ── Load all notes from backend on app init ────────────────────────────────
+  loadNotes: async () => {
+    set({ isLoading: true })
+    try {
+      const remote = await notesService.getAll()
+      set({
+        notes: remote.map(n => ({ ...n, isOpen: false })),
+        isLoading: false,
+      })
+    } catch (err) {
+      console.error('Failed to load notes:', err)
+      set({ isLoading: false })
     }
-  )
-)
+  },
+
+  // ── Pure UI state (no API call needed) ────────────────────────────────────
+  setManagerOpen: (isOpen) => set({ isManagerOpen: isOpen }),
+
+  openNote: (id) => set(state => ({
+    notes: state.notes.map(n => n.id === id ? { ...n, isOpen: true } : n),
+  })),
+
+  closeNote: (id) => set(state => ({
+    notes: state.notes.map(n => n.id === id ? { ...n, isOpen: false } : n),
+  })),
+
+  // ── CRUD — all changes go to PostgreSQL ───────────────────────────────────
+
+  addNote: async () => {
+    try {
+      const created = await notesService.create({ title: 'NOTE', text: '' })
+      set(state => ({
+        notes: [{ ...created, isOpen: true }, ...state.notes],
+      }))
+    } catch (err) {
+      console.error('Failed to create note:', err)
+    }
+  },
+
+  updateNote: async (id, text) => {
+    // Optimistic update
+    set(state => ({
+      notes: state.notes.map(n => n.id === id ? { ...n, text } : n),
+    }))
+    try {
+      await notesService.update(id, { text })
+    } catch (err) {
+      console.error('Failed to update note text:', err)
+    }
+  },
+
+  updateNoteTitle: async (id, title) => {
+    // Optimistic update
+    set(state => ({
+      notes: state.notes.map(n => n.id === id ? { ...n, title } : n),
+    }))
+    try {
+      await notesService.update(id, { title })
+    } catch (err) {
+      console.error('Failed to update note title:', err)
+    }
+  },
+
+  removeNote: async (id) => {
+    // Optimistic update — close + remove from list
+    set(state => ({
+      notes: state.notes.filter(n => n.id !== id),
+    }))
+    try {
+      await notesService.delete(id)
+    } catch (err) {
+      console.error('Failed to delete note:', err)
+    }
+  },
+}))
 </file>
 
 <file path="frontend/src/store/timerStore.ts">
@@ -10410,6 +10486,99 @@ export const useTimerStore = create<TimerState>()(
     }
   )
 )
+</file>
+
+<file path="frontend/src/vite-env.d.ts">
+/// <reference types="vite/client" />
+
+interface ImportMetaEnv {
+  readonly VITE_API_URL: string;
+  readonly VITE_AI_SERVER_URL: string;
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv;
+}
+
+/**
+ * Radix UI Module Declarations
+ */
+declare module '@radix-ui/react-dropdown-menu' {
+  import * as React from 'react';
+  export const Root: React.FC<any>;
+  export const Trigger: React.ForwardRefExoticComponent<any>;
+  export const Portal: React.FC<any>;
+  export const Content: React.ForwardRefExoticComponent<any>;
+  export const Label: React.FC<any>;
+  export const Item: React.ForwardRefExoticComponent<any>;
+  export const Separator: React.FC<any>;
+}
+
+/**
+ * React Syntax Highlighter Declarations
+ */
+declare module 'react-syntax-highlighter' {
+  export const Prism: any;
+}
+
+declare module 'react-syntax-highlighter/dist/esm/styles/prism' {
+  export const oneDark: any;
+}
+</file>
+
+<file path="backend/app/core/database.py">
+from typing import AsyncGenerator
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.orm import DeclarativeBase
+
+from app.core.config import settings
+
+# SQLite does not support pool_size / max_overflow — detect and branch
+_is_sqlite = settings.DATABASE_URL.startswith("sqlite")
+
+if _is_sqlite:
+    engine = create_async_engine(
+        settings.DATABASE_URL,
+        echo=False,
+        future=True,
+        pool_pre_ping=True,
+        connect_args={"check_same_thread": False},
+    )
+else:
+    engine = create_async_engine(
+        settings.DATABASE_URL,
+        echo=False,
+        future=True,
+        pool_pre_ping=True,
+        pool_size=settings.DB_POOL_SIZE,
+        max_overflow=settings.DB_MAX_OVERFLOW,
+        pool_timeout=settings.DB_POOL_TIMEOUT,
+        pool_recycle=settings.DB_POOL_RECYCLE,
+    )
+
+AsyncSessionLocal = async_sessionmaker(
+    bind=engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+    autoflush=False,
+)
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    """FastAPI dependency — yields a DB session with automatic commit/rollback."""
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+        finally:
+            await session.close()
 </file>
 
 <file path="backend/app/routers/translator.py">
@@ -11040,662 +11209,6 @@ async def stream_chat_response(db: AsyncSession, user_id: str, conversation_id: 
             )
 </file>
 
-<file path="backend/app/services/translator_service.py">
-import base64
-import json
-import shutil
-import traceback
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import AsyncGenerator
-from uuid import UUID
-from fastapi import HTTPException
-from sqlalchemy.orm import selectinload
-from sqlalchemy import desc, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.models.translator import TranslationJob, TranslationPage
-from app.utils.ai_client import ai_client
-from app.utils.image_utils import resize_image_for_ocr
-from app.utils.zip_utils import create_zip_stream as generate_zip_stream
-from app.services import file_service
-
-# ─── LEGACY VISION PIPELINE ────────────────────────────────────────────────
-
-async def process_job_vision(job_id: UUID) -> None:
-    """
-    Background task for the vision pipeline.
-    IMPORTANT: Creates its own DB session — never use a request-scoped session here.
-    """
-    from app.core.database import AsyncSessionLocal
-    
-    async with AsyncSessionLocal() as db:
-        try:
-            await _run_vision_job(db, job_id)
-        except Exception as e:
-            # Last-resort error catch — update status even if inner function failed
-            async with AsyncSessionLocal() as err_db:
-                job = await err_db.get(TranslationJob, job_id)
-                if job and job.status != "failed":
-                    job.status = "failed"
-                    job.error_message = f"Unhandled error: {e}"
-                    await err_db.commit()
-            raise
-
-async def _run_vision_job(db: AsyncSession, job_id: UUID) -> None:
-    # Step 1: Fetch the job and mark as processing
-    stmt = select(TranslationJob).where(TranslationJob.id == job_id)
-    result = await db.execute(stmt)
-    job = result.scalar_one_or_none()
-    
-    if not job:
-        return
-
-    job.status = "processing"
-    job.started_at = datetime.now(timezone.utc)
-    await db.commit()
-
-    try:
-        # Step 2: Get image paths
-        job_dir = file_service.get_upload_dir(job.user_id, job.id)
-        original_dir = job_dir / "original"
-        image_paths = sorted([str(p) for p in original_dir.glob("*") if p.is_file()])
-
-        # Update page count immediately so frontend pagination is correct
-        job.page_count = len(image_paths)
-        await db.commit()
-
-        # Step 3: Process each page
-        for page_number, img_path in enumerate(image_paths, start=1):
-            
-            # Upsert: Check if the page already exists
-            stmt = select(TranslationPage).where(
-                TranslationPage.job_id == job_id,
-                TranslationPage.page_number == page_number
-            )
-            result = await db.execute(stmt)
-            page = result.scalar_one_or_none()
-
-            if not page:
-                page = TranslationPage(
-                    job_id=job_id,
-                    page_number=page_number,
-                    original_path=img_path,
-                    processing_status="processing",
-                )
-                db.add(page)
-            else:
-                page.processing_status = "processing"
-                page.error_message = None
-                page.regions_json = None
-                page.translated_path = None
-                page.has_text = False
-                
-            await db.commit()
-            await db.refresh(page)
-
-            try:
-                # Encode image to base64
-                with open(img_path, "rb") as f:
-                    image_b64 = base64.b64encode(f.read()).decode("utf-8")
-
-                regions = []
-                async for chunk in ai_client.translate_image_vision_stream(
-                    image_base64=image_b64,
-                    source_language=job.source_language,
-                    target_language=job.target_language,
-                ):
-                    # 1. Parse the clean string generated by aiter_lines()
-                    if isinstance(chunk, dict):
-                        data = chunk
-                    else:
-                        try:
-                            data = json.loads(chunk)
-                        except json.JSONDecodeError:
-                            print(f"Backend Warning: Could not parse chunk: {chunk}")
-                            continue
-
-                    # 2. Handle End of Stream
-                    if data.get("done") is True:
-                        break
-                        
-                    if data.get("error"):
-                        raise RuntimeError(data["error"])
-
-                    # 3. Handle valid regions
-                    if "bbox" in data:
-                        regions.append(data)
-                        
-                        # Live commit so frontend sees progress
-                        page.regions_json = json.dumps(regions, ensure_ascii=False)
-                        page.has_text = True
-                        await db.commit()
-
-                # 5. Guaranteed Save on Success
-                page.translated_path = img_path
-                page.has_text = len(regions) > 0
-                page.processing_status = "completed" if regions else "no_text"
-                await db.commit()
-
-            except Exception as e:
-                # 6. INNER CATCH: Fails a single page and breaks the loop safely
-                await db.rollback() # Clear any hanging transactions
-                
-                page.processing_status = "failed"
-                page.error_message = str(e)
-                await db.commit()
-                
-                job.status = "failed"
-                job.error_message = f"Page {page_number} failed: {str(e)}"
-                await db.commit()
-                
-                print(f"Backend Task Failed on Page {page_number}: {e}")
-                break 
-
-        # Step 4: Mark the entire job as complete (if no pages failed)
-        if job.status != "failed":
-            job.status = "completed"
-            job.completed_at = datetime.now(timezone.utc)
-            await db.commit()
-
-    except Exception as e:
-        # 7. OUTER CATCH: Catastrophic failure
-        await db.rollback()
-        job.status = "failed"
-        job.error_message = f"Unhandled error: {str(e)}"
-        await db.commit()
-        print(f"Backend Task Catastrophic Failure: {e}")
-
-# ─── NEW 6-STAGE PIPELINE ──────────────────────────────────────────────────
-
-async def process_job_pipeline(job_id: UUID) -> None:
-    """
-    Background task for the 6-stage pipeline.
-    Creates its own DB session — never use a request-scoped session here.
-    """
-    from app.core.database import AsyncSessionLocal
-    
-    async with AsyncSessionLocal() as db:
-        try:
-            await _run_pipeline(db, job_id)
-        except Exception as e:
-            # Last-resort error catch
-            print(f"PIPELINE FATAL ERROR: {traceback.format_exc()}")
-            async with AsyncSessionLocal() as err_db:
-                job = await err_db.get(TranslationJob, job_id)
-                if job and job.status != "failed":
-                    job.status = "failed"
-                    job.error_message = f"Unhandled pipeline error: {e}"
-                    await err_db.commit()
-            raise
-
-async def _run_pipeline(db: AsyncSession, job_id: UUID) -> None:
-    job = await db.get(TranslationJob, job_id)
-    if not job:
-        return
-
-    # ── Mark job as processing ──────────────────────────────────────────────
-    print(f"[Pipeline] Starting Job {job_id}")
-    job.status = "processing"
-    job.started_at = datetime.now(timezone.utc)
-    await db.commit()
-
-    try:
-        # ── Get image paths ───────────────────────────────────────────────
-        job_dir = file_service.get_upload_dir(job.user_id, job.id)
-        original_dir = job_dir / "original"
-
-        # ── CBZ extraction ────────────────────────────────────────────────
-        raw_files = list(original_dir.glob("*"))
-        if len(raw_files) == 1 and raw_files[0].suffix.lower() in [".cbz", ".zip"]:
-            from app.services.file_service import extract_cbz
-            extract_cbz(str(raw_files[0]), str(original_dir))
-
-        # FIX 1: Recursive Search (.rglob) to find nested images in CBZ folders
-        IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
-        image_paths = sorted(
-            [str(p) for p in original_dir.rglob("*") if p.suffix.lower() in IMAGE_EXTS],
-            key=lambda s: file_service.natural_sort_key(s),
-        )
-
-        if not image_paths:
-            job.status = "failed"
-            job.error_message = "No image files found after extraction."
-            await db.commit()
-            return
-        
-        # ── Update page count so frontend knows total pages immediately ───
-        job.page_count = len(image_paths)
-        print(f"[Pipeline] Found {len(image_paths)} pages")
-        await db.commit()
-
-        # ── Create page records (1-based index) ──────────────────────────
-        pages_to_process = []
-        for i, img_path in enumerate(image_paths):
-            page_num = i + 1  # Strict 1-based indexing
-            
-            stmt = select(TranslationPage).where(
-                TranslationPage.job_id == job_id,
-                TranslationPage.page_number == page_num
-            )
-            result = await db.execute(stmt)
-            page = result.scalar_one_or_none()
-
-            if not page:
-                page = TranslationPage(
-                    job_id=job_id,
-                    page_number=page_num,
-                    original_path=img_path,
-                    phase_status="pending",
-                    processing_status="processing"
-                )
-                db.add(page)
-            else:
-                # Reset existing page
-                page.phase_status = "pending"
-                page.processing_status = "processing"
-                page.error_message = None
-                page.regions_json = None
-                page.translated_path = None
-                
-            pages_to_process.append(page)
-
-        await db.commit()
-        for p in pages_to_process:
-            await db.refresh(p)
-
-        # ════════════════════════════════════════════════════════════════════════
-        # PASS 1: Detection + OCR (Stages 1-3)
-        # ════════════════════════════════════════════════════════════════════════
-        ocr_results = {} # page_num -> regions
-
-        for page in pages_to_process:
-            try:
-                print(f"[Pipeline] OCR Stage for Page {page.page_number}")
-                page.phase_status = "detecting"
-                await db.commit()
-                
-                with open(page.original_path, "rb") as f:
-                    img_b64 = base64.b64encode(f.read()).decode("utf-8")
-                
-                regions = await ai_client.ocr_pipeline(img_b64)
-                
-                if not regions:
-                    print(f"[Pipeline] Page {page.page_number}: No text detected")
-                    page.phase_status = "completed"
-                    page.processing_status = "no_text"
-                    page.has_text = False
-                else:
-                    page.phase_status = "ocr" # Signal OCR completion
-                    ocr_results[page.page_number] = regions
-                
-                await db.commit()
-                
-            except Exception as e:
-                print(f"[Pipeline] OCR Error Page {page.page_number}: {e}")
-                page.phase_status = "failed"
-                page.processing_status = "failed"
-                page.error_message = f"OCR Error: {e}"
-                await db.commit()
-
-        # ════════════════════════════════════════════════════════════════════════
-        # PASS 2: Translation (Stage 5) - WITH RETRY LOGIC
-        # ════════════════════════════════════════════════════════════════════════
-        for page in pages_to_process:
-            # Skip pages that failed step 1 or have no text
-            if page.page_number not in ocr_results:
-                continue
-                
-            regions = ocr_results[page.page_number]
-            
-            # FIX 2: RETRY LOOP for LLM Non-Determinism
-            max_retries = 3
-            success = False
-            
-            for attempt in range(max_retries):
-                try:
-                    if attempt == 0:
-                        print(f"[Pipeline] Translating Page {page.page_number}")
-                    else:
-                        print(f"[Pipeline] Retry {attempt+1}/{max_retries} for Page {page.page_number}")
-                        
-                    page.phase_status = "translating"
-                    await db.commit()
-                    
-                    # Call AI Server
-                    translated_regions = await ai_client.translate_batch(regions)
-                    
-                    page.regions_json = json.dumps(translated_regions, ensure_ascii=False)
-                    page.translated_path = str(page.original_path) 
-                    page.has_text = True
-                    page.phase_status = "done"
-                    page.processing_status = "completed"
-                    await db.commit()
-                    
-                    success = True
-                    break # Success! Exit retry loop
-                    
-                except Exception as e:
-                    print(f"[Pipeline] Attempt {attempt+1} failed for Page {page.page_number}: {e}")
-                    import asyncio
-                    if attempt < max_retries - 1:
-                        await asyncio.sleep(2) 
-
-            if not success:
-                page.phase_status = "failed"
-                page.error_message = "Translation failed after 3 attempts"
-                await db.commit()
-
-        # ── Mark job complete ────────────────────────────────────────────────────
-        if job.status != "failed":
-            job.status = "completed"
-            job.completed_at = datetime.now(timezone.utc)
-            await db.commit()
-            print(f"[Pipeline] Job {job_id} Finished")
-
-    except Exception as e:
-        print(f"[Pipeline] CATASTROPHIC JOB FAILURE: {e}")
-        await db.rollback()
-        job.status = "failed"
-        job.error_message = f"Catastrophic pipeline error: {str(e)}"
-        await db.commit()
-
-# ─── CRUD Helper Methods ──────────────────────────────────────────────────
-
-async def create_zip_stream(job_id: UUID, db: AsyncSession) -> AsyncGenerator[bytes, None]:
-    stmt = select(TranslationPage).where(TranslationPage.job_id == job_id).order_by(TranslationPage.page_number)
-    result = await db.execute(stmt)
-    pages = result.scalars().all()
-
-    file_paths = []
-    for page in pages:
-        source_path = page.translated_path or page.original_path
-        if source_path and Path(source_path).exists():
-            name_in_zip = f"page_{page.page_number:03d}{Path(source_path).suffix}"
-            file_paths.append((source_path, name_in_zip))
-
-    async for chunk in generate_zip_stream(file_paths):
-        yield chunk
-
-async def create_translation_job(db: AsyncSession, user_id: UUID, filename: str, file_size: int, source_lang: str, target_lang: str) -> TranslationJob:
-    job = TranslationJob(
-        user_id=user_id, 
-        original_filename=filename, 
-        file_path="", 
-        file_size_bytes=file_size, 
-        source_language=source_lang, 
-        target_language=target_lang
-    )
-    db.add(job)
-    await db.commit()
-    await db.refresh(job)
-    return job
-
-async def update_job_file_path(db: AsyncSession, job_id: UUID, file_path: str) -> TranslationJob:
-    job = await db.get(TranslationJob, job_id)
-    job.file_path = file_path
-    await db.commit()
-    await db.refresh(job)
-    return job
-
-async def get_user_jobs(db: AsyncSession, user_id: UUID, skip: int, limit: int) -> list[TranslationJob]:
-    stmt = select(TranslationJob).where(TranslationJob.user_id == user_id).order_by(desc(TranslationJob.created_at)).offset(skip).limit(limit)
-    result = await db.execute(stmt)
-    return list(result.scalars().all())
-
-async def get_job_detail(db: AsyncSession, user_id: UUID, job_id: str) -> TranslationJob:
-    stmt = select(TranslationJob).where(
-        TranslationJob.id == job_id, 
-        TranslationJob.user_id == user_id
-    ).options(selectinload(TranslationJob.pages))
-    
-    result = await db.execute(stmt)
-    job = result.scalar_one_or_none()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    return job
-
-async def reset_job_for_retranslation(db: AsyncSession, user_id: UUID, job_id: UUID) -> TranslationJob:
-    stmt = select(TranslationJob).where(
-        TranslationJob.id == job_id, 
-        TranslationJob.user_id == user_id
-    ).options(selectinload(TranslationJob.pages))
-    
-    result = await db.execute(stmt)
-    job = result.scalar_one_or_none()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-        
-    job.status = "pending"
-    job.error_message = None
-    job.completed_at = None
-    
-    for page in job.pages:
-        page.processing_status = "pending"
-        page.phase_status = "pending"
-        page.regions_json = None
-        page.translated_path = None
-        page.error_message = None
-        page.has_text = False
-        page.processing_ms = None
-    
-    await db.commit()
-    await db.refresh(job)
-    return job
-
-async def delete_translation_job(db: AsyncSession, user_id: UUID, job_id: UUID) -> None:
-    stmt = select(TranslationJob).where(TranslationJob.id == job_id, TranslationJob.user_id == user_id)
-    result = await db.execute(stmt)
-    job = result.scalar_one_or_none()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-        
-    job_dir = file_service.get_upload_dir(user_id, job.id)
-    if job_dir.exists():
-        shutil.rmtree(job_dir)
-        
-    await db.delete(job)
-    await db.commit()
-
-async def get_page_file_path(db: AsyncSession, user_id: UUID, job_id: UUID, page_num: int, image_type: str) -> str:
-    stmt = select(TranslationPage).join(TranslationJob).where(
-        TranslationJob.user_id == user_id,
-        TranslationPage.job_id == job_id,
-        TranslationPage.page_number == page_num
-    )
-    result = await db.execute(stmt)
-    page = result.scalar_one_or_none()
-    
-    if not page:
-        raise HTTPException(status_code=404, detail=f"Page {page_num} not found")
-        
-    target_path = page.translated_path if image_type == "translated" else page.original_path
-    
-    if not target_path or not Path(target_path).exists():
-        if image_type == "original":
-             raise HTTPException(status_code=404, detail="Original image missing")
-        raise HTTPException(status_code=404, detail="Translated image not generated")
-        
-    return str(target_path)
-</file>
-
-<file path="backend/app/utils/ai_client.py">
-import json
-from typing import AsyncGenerator
-import httpx
-
-from app.core.config import settings
-
-class AIServerError(Exception):
-    def __init__(self, status_code: int, message: str):
-        self.status_code = status_code
-        self.message = message
-        super().__init__(message)
-
-
-class AIServerClient:
-    """Singleton async HTTP client for communicating with the AI inference server."""
-    
-    def __init__(self):
-        self.base_url = settings.AI_SERVER_URL
-        self._client: httpx.AsyncClient | None = None
-
-    @property
-    def client(self) -> httpx.AsyncClient:
-        if not self._client:
-            self._client = httpx.AsyncClient(base_url=self.base_url, timeout=300.0)
-        return self._client
-
-    async def chat_stream(
-        self,
-        messages: list[dict],
-        model: str,
-        max_tokens: int | None = None,  # None = let AI server use its .env MAX_TOKENS
-        temperature: float = 0.7,
-    ) -> AsyncGenerator[str, None]:
-        """
-        POST /v1/chat/completions with stream=True.
-        Parse SSE response and yield each token string.
-        """
-        payload = {
-            "model": model,
-            "messages": messages,
-            "stream": True,
-            "temperature": temperature
-        }
-        # Only set max_tokens if explicitly passed — otherwise let AI server
-        # use its own .env MAX_TOKENS setting (avoids hardcoded 2048 override)
-        if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
-        
-        async with self.client.stream("POST", "/v1/chat/completions", json=payload) as response:
-            response.raise_for_status()
-            
-            async for line in response.aiter_lines():
-                if line.startswith("data: "):
-                    data = line[6:].strip()
-                    
-                    if data == "[DONE]":
-                        return
-                    
-                    if not data:
-                        continue
-                        
-                    try:
-                        parsed = json.loads(data)
-                        choices = parsed.get("choices", [])
-                        if choices:
-                            token = choices[0].get("delta", {}).get("content", "")
-                            if token:
-                                yield token
-                    except json.JSONDecodeError:
-                        continue
-
-    async def translate_image_vision_stream(
-        self, 
-        image_base64: str, 
-        source_language: str, 
-        target_language: str
-    ) -> AsyncGenerator[str | dict, None]:
-        
-        payload = {
-            "image": image_base64,
-            "source_language": source_language,
-            "target_language": target_language
-        }
-        
-        # Set timeout to None to completely disable connection dropping
-        timeout_config = httpx.Timeout(None) 
-        ai_url = "http://127.0.0.1:8001/v1/translate/image/stream"
-
-        async with httpx.AsyncClient(timeout=timeout_config) as client:
-            try:
-                async with client.stream("POST", ai_url, json=payload) as response:
-                    response.raise_for_status()
-                    
-                    # Use aiter_lines() to prevent SSE chunk fragmentation!
-                    async for line in response.aiter_lines():
-                        if line.startswith("data: "):
-                            data_str = line[6:].strip()
-                            if data_str:
-                                yield data_str
-                                
-            except Exception as e:
-                yield {"error": f"AI Client connection error: {str(e)}", "done": True}
-
-    async def translate_image(
-        self,
-        image_base64: str,
-        source_language: str,
-        target_language: str,
-    ) -> dict:
-        """POST /v1/translate/image. Returns {translated_text, bounding_boxes, original_text}."""
-        response = await self.client.post("/v1/translate/image", json={
-            "image": image_base64,
-            "source_language": source_language,
-            "target_language": target_language,
-        })
-        response.raise_for_status()
-        return response.json()
-
-    async def list_models(self) -> list[dict]:
-        """GET /v1/models. Returns list of available model info."""
-        response = await self.client.get("/v1/models")
-        response.raise_for_status()
-        return response.json().get("data", [])
-
-    async def health_check(self) -> bool:
-        """Returns True if AI server is healthy and model is loaded."""
-        try:
-            response = await self.client.get("/v1/health", timeout=5.0)
-            return response.json().get("model_loaded", False)
-        except Exception:
-            return False
-
-    async def ocr_pipeline(self, image_base64: str) -> list[dict]:
-        """
-        POST /v1/translate/ocr-pipeline
-        Executes Stages 1, 2, and 3 on the AI server in one shot.
-        Returns: [{"bbox": [x1,y1,x2,y2], "japanese": "text"}, ...]
-        Raises AIServerError on failure.
-        """
-        try:
-            response = await self.client.post(
-                "/v1/translate/ocr-pipeline",
-                json={"image": image_base64},
-                timeout=120.0,
-            )
-            response.raise_for_status()
-            return response.json()["regions"]
-        except httpx.ConnectError as e:
-            raise AIServerError(503, f"AI server unreachable: {e}") from e
-        except httpx.HTTPStatusError as e:
-            raise AIServerError(e.response.status_code, str(e)) from e
-
-
-    async def translate_batch(self, regions: list[dict]) -> list[dict]:
-        """
-        POST /v1/translate/batch
-        Triggers Hangoff Protocol on AI server side and translates.
-        Returns regions with "english" field populated.
-        """
-        try:
-            response = await self.client.post(
-                "/v1/translate/batch",
-                json={"regions": regions},
-                timeout=600.0,   # 35B model may need time for first load + inference
-            )
-            response.raise_for_status()
-            return response.json()["regions"]
-        except httpx.ConnectError as e:
-            raise AIServerError(503, f"AI server unreachable: {e}") from e
-        except httpx.HTTPStatusError as e:
-            raise AIServerError(e.response.status_code, str(e)) from e
-
-# Singleton instance — import this in services
-ai_client = AIServerClient()
-</file>
-
 <file path="frontend/src/App.tsx">
 import { Routes, Route, useLocation } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
@@ -11763,95 +11276,234 @@ export default function App() {
 }
 </file>
 
-<file path="frontend/src/components/chat/ChatInput.tsx">
-import React, { useState, useRef, useEffect } from 'react';
-import { Send } from 'lucide-react';
-import { useChatStore } from '@/store/chatStore';
-import { cn } from '@/lib/utils';
+<file path="frontend/src/components/chat/ChatMessage.tsx">
+import { useState, memo, useMemo } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { Copy, Check, User, Bot, Brain, ChevronDown, ChevronRight } from 'lucide-react';
+import { cn, timeAgo } from '@/lib/utils';
 
-export const ChatInput = () => {
-  const [content, setContent] = useState('');
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const { sendMessage, isStreaming } = useChatStore();
-
-  const CHAR_WARN = 2000;
-  const CHAR_LIMIT = 4000;
-
-  useEffect(() => {
-    const textarea = textareaRef.current;
-    if (textarea) {
-      textarea.style.height = 'auto';
-      const newHeight = Math.min(textarea.scrollHeight, 160);
-      textarea.style.height = `${newHeight}px`;
-    }
-  }, [content]);
-
-  const handleSubmit = async () => {
-    if (!content.trim() || isStreaming || content.length > CHAR_LIMIT) return;
-    const messageToSend = content.trim();
-    setContent(''); 
-    try { await sendMessage(messageToSend); } 
-    catch (error) { setContent(messageToSend); }
+interface ChatMessageProps {
+  message: {
+    id: string;
+    role: 'user' | 'assistant' | 'system';
+    content: string;
+    timestamp: string; 
+    tokens_used?: number | null;
   };
+  isStreaming?: boolean;
+}
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSubmit();
+export const ChatMessage = memo(({ message, isStreaming }: ChatMessageProps) => {
+  const isUser = message.role === 'user';
+  const [copied, setCopied] = useState(false);
+  const [isThinkingOpen, setIsThinkingOpen] = useState(false);
+
+  // Extract <think> content vs main content
+  const { thoughtContent, mainContent, isThinking } = useMemo(() => {
+    // 1. User messages are never "thinking"
+    if (isUser) return { thoughtContent: null, mainContent: message.content, isThinking: false };
+
+    // 2. Check if we have a closing tag </think>
+    // This is the most reliable signal that thinking is happening or happened.
+    const hasClosingTag = message.content.includes('</think>');
+    
+    // 3. Regex Strategy:
+    // (?:^|<think>) -> Match either the START of the string OR an explicit <think> tag
+    // ([\s\S]*?)    -> Capture content non-greedily
+    // (?:<\/think>|$) -> Stop at </think> OR end of string (if streaming)
+    
+    let match;
+    if (hasClosingTag) {
+        // If we have a closing tag, we act aggressively: everything before it is a thought.
+        // This fixes the bug where the opening <think> is missing.
+        const robustRegex = /(?:^|<think>)([\s\S]*?)<\/think>/;
+        match = message.content.match(robustRegex);
+    } else {
+        // If no closing tag yet, strictly require <think> to start (to avoid hiding normal text)
+        // unless we are in the very early streaming phase (optional, keeping it strict for safety)
+        const strictRegex = /<think>([\s\S]*?)$/;
+        match = message.content.match(strictRegex);
     }
-  };
 
-  const isOverLimit = content.length > CHAR_LIMIT;
-  const isNearLimit = content.length > CHAR_WARN && content.length <= CHAR_LIMIT;
+    if (match) {
+      const thoughtContent = match[1]; // The text inside the tags
+      
+      // Determine if we are still actively thinking (streaming and no closing tag)
+      const isThinking = !hasClosingTag && !!isStreaming;
+      
+      // Remove the full match (tags + content) from the main message
+      // Note: If we matched from start (^), this correctly strips the preamble.
+      let cleanMain = message.content.replace(match[0], '').trim();
+      
+      // Edge case: If main content is empty but we are done thinking, ensure we don't show nothing
+      if (!isThinking && !cleanMain) {
+        cleanMain = ""; 
+      }
+
+      return { thoughtContent, mainContent: cleanMain, isThinking };
+    }
+
+    // Default: No thinking detected
+    return { thoughtContent: null, mainContent: message.content, isThinking: false };
+  }, [message.content, isUser, isStreaming]);
+
+  const handleCopy = (code: string) => {
+    navigator.clipboard.writeText(code);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   return (
-    <div className="w-full relative">
+    <div className={cn(
+      "flex w-full mb-8 group animate-in fade-in slide-in-from-bottom-2", 
+      isUser ? "justify-end" : "justify-start"
+    )}>
+      <div className={cn(
+        "flex max-w-[90%] md:max-w-[80%] gap-4", 
+        isUser ? "flex-row-reverse" : "flex-row"
+      )}>
         
-        {content.length > 1500 && (
-          <div className={cn(
-            "absolute -top-8 right-2 text-[10px] font-mono px-2 py-0.5 rounded-md border backdrop-blur-md animate-in fade-in slide-in-from-bottom-1",
-            isOverLimit ? "bg-red-500/20 text-red-400 border-red-500/30" : isNearLimit ? "bg-amber-500/20 text-amber-400 border-amber-500/30" : "bg-black/40 text-white/40 border-white/10"
-          )}>
-            {content.length.toLocaleString()} / {CHAR_LIMIT.toLocaleString()}
-          </div>
-        )}
-
-        {/* THE FIX: Glassy input background */}
+        {/* Avatar */}
         <div className={cn(
-          "relative flex items-end gap-2 p-2 rounded-2xl bg-black/40 backdrop-blur-md border border-white/10 transition-all duration-200 shadow-xl",
-          "ml-10 md:ml-[52px]",
-          isOverLimit ? "border-red-500/50" : isNearLimit ? "focus-within:border-amber-400" : "focus-within:border-primary-500/50 focus-within:ring-1 focus-within:ring-primary-500/20"
+          "w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-1 shadow-md",
+          isUser ? "bg-primary-500/80 backdrop-blur-md" : "bg-black/40 backdrop-blur-md border border-white/10"
         )}>
-          <textarea
-            ref={textareaRef}
-            rows={1}
-            value={content}
-            onChange={(e) => setContent(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={isStreaming ? "Kyuna is thinking..." : "Ask Kyuna anything..."}
-            disabled={isStreaming}
-            className="flex-1 bg-transparent border-none outline-none text-white text-sm py-2 px-3 resize-none custom-scrollbar placeholder:text-white/40 disabled:cursor-not-allowed"
-          />
+          {isUser ? <User size={16} className="text-white" /> : <Bot size={18} className="text-primary-400" />}
+        </div>
 
-          <button
-            onClick={handleSubmit}
-            disabled={!content.trim() || isStreaming || isOverLimit}
-            className={cn(
-              "mb-1 p-2 rounded-xl transition-all flex items-center justify-center shrink-0",
-              content.trim() && !isStreaming && !isOverLimit
-                ? "bg-primary-600 text-white shadow-lg hover:bg-primary-500 active:scale-95"
-                : "bg-white/5 text-white/30 cursor-not-allowed"
+        {/* Content Bubble */}
+        <div className="flex flex-col space-y-2 min-w-0">
+          <div className={cn(
+            "p-4 md:p-5 rounded-2xl text-[15px] leading-relaxed shadow-xl", 
+            isUser 
+              ? "bg-primary-600/80 backdrop-blur-md text-white rounded-tr-none shadow-primary-900/20" 
+              : "bg-black/40 backdrop-blur-md border border-white/10 text-white/90 rounded-tl-none"
+          )}>
+            {isUser ? (
+              <p className="whitespace-pre-wrap">{message.content}</p>
+            ) : (
+              <>
+                {/* Thinking / Reasoning Dropdown */}
+                {thoughtContent !== null && (
+                  <div className="mb-4 rounded-lg overflow-hidden border border-white/5 bg-black/20">
+                    <button 
+                      onClick={() => setIsThinkingOpen(!isThinkingOpen)}
+                      className={cn(
+                        "flex items-center gap-2 w-full px-3 py-2 text-xs font-medium transition-colors select-none",
+                        isThinking 
+                          ? "text-primary-300 animate-pulse bg-primary-500/5" 
+                          : "text-white/50 hover:text-white/80 hover:bg-white/5"
+                      )}
+                    >
+                      <Brain size={14} className={isThinking ? "animate-pulse" : ""} />
+                      <span>
+                        {isThinking ? "Thinking..." : "Thought Process"}
+                      </span>
+                      <div className="ml-auto opacity-70">
+                         {isThinkingOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                      </div>
+                    </button>
+                    
+                    {/* Content area: Visible if open OR if currently thinking (auto-open while streaming) */}
+                    {(isThinkingOpen || isThinking) && (
+                      <div className="px-3 py-3 text-xs md:text-sm text-white/60 border-t border-white/5 font-mono bg-black/10 leading-relaxed whitespace-pre-wrap animate-in fade-in slide-in-from-top-1">
+                        {thoughtContent}
+                        {isThinking && <span className="inline-block w-1.5 h-3 ml-1 align-middle bg-primary-400 animate-pulse" />}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Main Response */}
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={{
+                    // --- TYPOGRAPHY SPACING RULES ---
+                    p: ({ children }) => <p className="mb-4 last:mb-0 leading-relaxed text-white/85">{children}</p>,
+                    ul: ({ children }) => <ul className="mb-4 pl-6 space-y-2 list-disc marker:text-white/30">{children}</ul>,
+                    ol: ({ children }) => <ol className="mb-4 pl-6 space-y-2 list-decimal marker:text-white/30">{children}</ol>,
+                    li: ({ children }) => <li className="pl-1 text-white/85">{children}</li>,
+                    h1: ({ children }) => <h1 className="text-2xl font-bold mb-4 mt-6 text-white">{children}</h1>,
+                    h2: ({ children }) => <h2 className="text-xl font-bold mb-3 mt-5 text-white">{children}</h2>,
+                    h3: ({ children }) => <h3 className="text-lg font-semibold mb-3 mt-4 text-white">{children}</h3>,
+                    strong: ({ children }) => <strong className="font-bold text-white">{children}</strong>,
+                    blockquote: ({ children }) => <blockquote className="border-l-4 border-primary-500/50 pl-4 py-2 my-4 bg-black/20 rounded-r-lg italic text-white/70">{children}</blockquote>,
+                    
+                    // --- CODE BLOCKS ---
+                    code({ node, inline, className, children, ...props }: any) {
+                      const match = /language-(\w+)/.exec(className || '');
+                      const codeString = String(children).replace(/\n$/, '');
+                      
+                      if (!inline && match) {
+                        return (
+                          <div className="relative my-6 rounded-lg overflow-hidden border border-white/10 group/code">
+                            <div className="flex items-center justify-between px-4 py-2 bg-black/60 border-b border-white/5 backdrop-blur-md">
+                              <span className="text-[10px] font-mono text-white/50 uppercase tracking-widest">
+                                {match[1]}
+                              </span>
+                              <button
+                                onClick={() => handleCopy(codeString)}
+                                className="text-white/40 hover:text-white transition-colors"
+                              >
+                                {copied ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
+                              </button>
+                            </div>
+                            <SyntaxHighlighter
+                              style={oneDark}
+                              language={match[1]}
+                              PreTag="div"
+                              customStyle={{ margin: 0, padding: '1rem', background: 'rgba(0,0,0,0.4)', fontSize: '13px' }}
+                              {...props}
+                            >
+                              {codeString}
+                            </SyntaxHighlighter>
+                          </div>
+                        );
+                      }
+                      return (
+                        <code className="bg-white/10 px-1.5 py-0.5 rounded text-primary-300 font-mono text-[13px]" {...props}>
+                          {children}
+                        </code>
+                      );
+                    }
+                  }}
+                >
+                  {/* Append cursor to main content only if NOT currently thinking */}
+                  {`${mainContent}${isStreaming && !isThinking ? '▍' : ''}`}
+                </ReactMarkdown>
+              </>
             )}
-            aria-label="Send message"
-          >
-            <Send size={18} />
-          </button>
+          </div>
+
+          {/* Metadata Footer */}
+          <div className={cn(
+            "flex items-center gap-3 px-1 transition-opacity opacity-0 group-hover:opacity-100",
+            isUser ? "flex-row-reverse" : "flex-row"
+          )}>
+            <span className="text-[10px] text-white/30 font-medium">
+              {timeAgo(message.timestamp)}
+            </span>
+            {!isUser && message.tokens_used && (
+              <span className="text-[10px] text-primary-500/50 font-mono">
+                {message.tokens_used} tokens
+              </span>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
-};
+}, (prevProps, nextProps) => {
+  return (
+    prevProps.message.content === nextProps.message.content &&
+    prevProps.isStreaming === nextProps.isStreaming
+  );
+});
 
-export default ChatInput;
+export default ChatMessage;
 </file>
 
 <file path="frontend/src/components/chat/ModelSelector.tsx">
@@ -12866,81 +12518,6 @@ export const PageViewer = () => {
 export default PageViewer;
 </file>
 
-<file path="frontend/src/components/ui/ThemeBackground.tsx">
-import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { useSettingsStore } from '@/store/settingsStore';
-
-const THEME_ASSETS: Record<string, string> = {
-  'night-garden': '/assets/backgrounds/night-garden.mp4',
-  'rainy-city': '/assets/backgrounds/rainy-city.mp4',
-  'space': '/assets/backgrounds/space.mp4',
-  'forest': '/assets/backgrounds/forest.mp4',
-};
-
-export const ThemeBackground = () => {
-  const currentTheme = useSettingsStore((state) => state.theme);
-  const [hasError, setHasError] = useState(false);
-  const [customBg, setCustomBg] = useState<string | null>(null);
-
-  // Listen for custom background changes across the app
-  useEffect(() => {
-    const savedBg = localStorage.getItem('kyuna-bg');
-    if (savedBg) setCustomBg(savedBg);
-
-    const handleStorageChange = () => setCustomBg(localStorage.getItem('kyuna-bg'));
-    window.addEventListener('bg-updated', handleStorageChange);
-    return () => window.removeEventListener('bg-updated', handleStorageChange);
-  }, []);
-
-  const videoSrc = THEME_ASSETS[currentTheme] || THEME_ASSETS['night-garden'];
-
-  return (
-    <div className="absolute inset-0 z-0 overflow-hidden bg-surface-950">
-      <AnimatePresence mode="popLayout">
-        {customBg ? (
-          /* --- User Uploaded Image --- */
-          <motion.div
-            key="custom-bg"
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            transition={{ duration: 1.2, ease: 'easeInOut' }}
-            className="absolute inset-0 bg-cover bg-center"
-            style={{ backgroundImage: `url(${customBg})` }}
-          />
-        ) : hasError ? (
-          /* --- Fallback: Static Dark Gradient --- */
-          <motion.div
-            key="fallback-bg"
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="absolute inset-0 bg-gradient-to-br from-surface-900 via-black to-surface-950"
-          />
-        ) : (
-          /* --- Primary: Animated Video Layer --- */
-          <motion.div
-            key={currentTheme} 
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            transition={{ duration: 1.2, ease: 'easeInOut' }}
-            className="absolute inset-0 h-full w-full"
-          >
-            <video autoPlay loop muted playsInline onError={() => setHasError(true)} className="h-full w-full object-cover">
-              <source src={videoSrc} type="video/mp4" />
-            </video>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* --- Readability Overlay --- */}
-      {/* Removed backdrop-blur to keep the background completely sharp and original. 
-        Retained a subtle 20% dark tint (bg-black/20) solely to ensure white UI text remains readable.
-      */}
-      <div className="absolute inset-0 bg-black/20" />
-    </div>
-  );
-};
-
-export default ThemeBackground;
-</file>
-
 <file path="frontend/src/layouts/MainLayout.tsx">
 import { Outlet, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -13112,6 +12689,96 @@ export const chatService = {
     }
   },
 }
+</file>
+
+<file path="frontend/src/store/authStore.ts">
+import { create } from 'zustand'
+import { persist, createJSONStorage } from 'zustand/middleware'
+import { authService } from '@/services/auth.service'
+import { useSettingsStore } from '@/store/settingsStore'
+import { useNoteStore } from '@/store/noteStore'
+import type { User } from '@/types/auth.types'
+
+export type { User }
+
+interface AuthState {
+  user: User | null
+  token: string | null
+  refreshToken: string | null
+  isLoggedIn: boolean
+  isInitialized: boolean
+
+  initialize: () => Promise<void>
+  login: (user: User, token: string, refreshToken: string) => void
+  logout: () => Promise<void>
+  setUser: (user: User) => void
+  updateToken: (token: string) => void
+}
+
+/** After a successful auth check, pull user data from PostgreSQL. */
+async function hydrateUserData() {
+  await useSettingsStore.getState().syncFromBackend()
+  await useNoteStore.getState().loadNotes()
+}
+
+export const useAuthStore = create<AuthState>()(
+  persist(
+    (set, get) => ({
+      user: null,
+      token: null,
+      refreshToken: null,
+      isLoggedIn: false,
+      isInitialized: false,
+
+      initialize: async () => {
+        const { token } = get()
+        if (!token) {
+          set({ isInitialized: true, isLoggedIn: false })
+          return
+        }
+        try {
+          const userData = await authService.getMe()
+          set({ user: userData, isLoggedIn: true })
+          // Hydrate settings + notes from PostgreSQL
+          await hydrateUserData()
+        } catch {
+          set({ user: null, token: null, refreshToken: null, isLoggedIn: false })
+        } finally {
+          set({ isInitialized: true })
+        }
+      },
+
+      login: (user, token, refreshToken) => {
+        set({ user, token, refreshToken, isLoggedIn: true, isInitialized: true })
+        // Hydrate settings + notes after login (fire-and-forget)
+        void hydrateUserData()
+      },
+
+      logout: async () => {
+        try {
+          await authService.logout()
+        } catch {
+          console.warn('Backend logout failed; clearing local state anyway.')
+        } finally {
+          set({ user: null, token: null, refreshToken: null, isLoggedIn: false })
+        }
+      },
+
+      setUser: (user) => set({ user }),
+      updateToken: (token) => set({ token }),
+    }),
+    {
+      name: 'kyuna-auth-storage',
+      storage: createJSONStorage(() => localStorage),
+      partialize: (state) => ({
+        user:         state.user,
+        token:        state.token,
+        refreshToken: state.refreshToken,
+        isLoggedIn:   state.isLoggedIn,
+      }),
+    }
+  )
+)
 </file>
 
 <file path="frontend/src/types/chat.types.ts">
@@ -13334,6 +13001,778 @@ class MessageCreate(BaseModel):
     model: Optional[str] = None
 </file>
 
+<file path="backend/app/services/translator_service.py">
+import base64
+import json
+import shutil
+import traceback
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import AsyncGenerator
+from uuid import UUID
+from fastapi import HTTPException
+from sqlalchemy.orm import selectinload
+from sqlalchemy import desc, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.translator import TranslationJob, TranslationPage
+from app.utils.ai_client import ai_client
+from app.utils.image_utils import resize_image_for_ocr
+from app.utils.zip_utils import create_zip_stream as generate_zip_stream
+from app.services import file_service
+
+# ─── LEGACY VISION PIPELINE ────────────────────────────────────────────────
+
+async def process_job_vision(job_id: UUID) -> None:
+    """
+    Background task for the vision pipeline.
+    IMPORTANT: Creates its own DB session — never use a request-scoped session here.
+    """
+    from app.core.database import AsyncSessionLocal
+    
+    async with AsyncSessionLocal() as db:
+        try:
+            await _run_vision_job(db, job_id)
+        except Exception as e:
+            # Last-resort error catch — update status even if inner function failed
+            async with AsyncSessionLocal() as err_db:
+                job = await err_db.get(TranslationJob, job_id)
+                if job and job.status != "failed":
+                    job.status = "failed"
+                    job.error_message = f"Unhandled error: {e}"
+                    await err_db.commit()
+            raise
+
+async def _run_vision_job(db: AsyncSession, job_id: UUID) -> None:
+    # Step 1: Fetch the job and mark as processing
+    stmt = select(TranslationJob).where(TranslationJob.id == job_id)
+    result = await db.execute(stmt)
+    job = result.scalar_one_or_none()
+    
+    if not job:
+        return
+
+    job.status = "processing"
+    job.started_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    try:
+        # Step 2: Get image paths
+        job_dir = file_service.get_upload_dir(job.user_id, job.id)
+        original_dir = job_dir / "original"
+        image_paths = sorted([str(p) for p in original_dir.glob("*") if p.is_file()])
+
+        # Update page count immediately so frontend pagination is correct
+        job.page_count = len(image_paths)
+        await db.commit()
+
+        # Step 3: Process each page
+        for page_number, img_path in enumerate(image_paths, start=1):
+            
+            # Upsert: Check if the page already exists
+            stmt = select(TranslationPage).where(
+                TranslationPage.job_id == job_id,
+                TranslationPage.page_number == page_number
+            )
+            result = await db.execute(stmt)
+            page = result.scalar_one_or_none()
+
+            if not page:
+                page = TranslationPage(
+                    job_id=job_id,
+                    page_number=page_number,
+                    original_path=img_path,
+                    processing_status="processing",
+                )
+                db.add(page)
+            else:
+                page.processing_status = "processing"
+                page.error_message = None
+                page.regions_json = None
+                page.translated_path = None
+                page.has_text = False
+                
+            await db.commit()
+            await db.refresh(page)
+
+            try:
+                # Encode image to base64
+                with open(img_path, "rb") as f:
+                    image_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+                regions = []
+                async for chunk in ai_client.translate_image_vision_stream(
+                    image_base64=image_b64,
+                    source_language=job.source_language,
+                    target_language=job.target_language,
+                ):
+                    # 1. Parse the clean string generated by aiter_lines()
+                    if isinstance(chunk, dict):
+                        data = chunk
+                    else:
+                        try:
+                            data = json.loads(chunk)
+                        except json.JSONDecodeError:
+                            print(f"Backend Warning: Could not parse chunk: {chunk}")
+                            continue
+
+                    # 2. Handle End of Stream
+                    if data.get("done") is True:
+                        break
+                        
+                    if data.get("error"):
+                        raise RuntimeError(data["error"])
+
+                    # 3. Handle valid regions
+                    if "bbox" in data:
+                        regions.append(data)
+                        
+                        # Live commit so frontend sees progress
+                        page.regions_json = json.dumps(regions, ensure_ascii=False)
+                        page.has_text = True
+                        await db.commit()
+
+                # 5. Guaranteed Save on Success
+                page.translated_path = img_path
+                page.has_text = len(regions) > 0
+                page.processing_status = "completed" if regions else "no_text"
+                await db.commit()
+
+            except Exception as e:
+                # 6. INNER CATCH: Fails a single page and breaks the loop safely
+                await db.rollback() # Clear any hanging transactions
+                
+                page.processing_status = "failed"
+                page.error_message = str(e)
+                await db.commit()
+                
+                job.status = "failed"
+                job.error_message = f"Page {page_number} failed: {str(e)}"
+                await db.commit()
+                
+                print(f"Backend Task Failed on Page {page_number}: {e}")
+                break 
+
+        # Step 4: Mark the entire job as complete (if no pages failed)
+        if job.status != "failed":
+            job.status = "completed"
+            job.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+
+    except Exception as e:
+        # 7. OUTER CATCH: Catastrophic failure
+        await db.rollback()
+        job.status = "failed"
+        job.error_message = f"Unhandled error: {str(e)}"
+        await db.commit()
+        print(f"Backend Task Catastrophic Failure: {e}")
+
+# ─── NEW 6-STAGE PIPELINE ──────────────────────────────────────────────────
+
+async def process_job_pipeline(job_id: UUID) -> None:
+    """
+    Background task for the 6-stage pipeline.
+    Creates its own DB session — never use a request-scoped session here.
+    """
+    from app.core.database import AsyncSessionLocal
+    
+    async with AsyncSessionLocal() as db:
+        try:
+            await _run_pipeline(db, job_id)
+        except Exception as e:
+            # Last-resort error catch
+            print(f"PIPELINE FATAL ERROR: {traceback.format_exc()}")
+            async with AsyncSessionLocal() as err_db:
+                job = await err_db.get(TranslationJob, job_id)
+                if job and job.status != "failed":
+                    job.status = "failed"
+                    job.error_message = f"Unhandled pipeline error: {e}"
+                    await err_db.commit()
+            raise
+
+async def _run_pipeline(db: AsyncSession, job_id: UUID) -> None:
+    job = await db.get(TranslationJob, job_id)
+    if not job:
+        return
+
+    # ── Mark job as processing ──────────────────────────────────────────────
+    print(f"[Pipeline] Starting Job {job_id}")
+    job.status = "processing"
+    job.started_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    try:
+        # ── Get image paths ───────────────────────────────────────────────
+        job_dir = file_service.get_upload_dir(job.user_id, job.id)
+        original_dir = job_dir / "original"
+
+        # ── CBZ extraction ────────────────────────────────────────────────
+        raw_files = list(original_dir.glob("*"))
+        if len(raw_files) == 1 and raw_files[0].suffix.lower() in [".cbz", ".zip"]:
+            from app.services.file_service import extract_cbz
+            extract_cbz(str(raw_files[0]), str(original_dir))
+
+        # FIX 1: Recursive Search (.rglob) to find nested images in CBZ folders
+        IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+        image_paths = sorted(
+            [str(p) for p in original_dir.rglob("*") if p.suffix.lower() in IMAGE_EXTS],
+            key=lambda s: file_service.natural_sort_key(s),
+        )
+
+        if not image_paths:
+            job.status = "failed"
+            job.error_message = "No image files found after extraction."
+            await db.commit()
+            return
+        
+        # ── Update page count so frontend knows total pages immediately ───
+        job.page_count = len(image_paths)
+        print(f"[Pipeline] Found {len(image_paths)} pages")
+        await db.commit()
+
+        # ── Create page records (1-based index) ──────────────────────────
+        pages_to_process = []
+        for i, img_path in enumerate(image_paths):
+            page_num = i + 1  # Strict 1-based indexing
+            
+            stmt = select(TranslationPage).where(
+                TranslationPage.job_id == job_id,
+                TranslationPage.page_number == page_num
+            )
+            result = await db.execute(stmt)
+            page = result.scalar_one_or_none()
+
+            if not page:
+                page = TranslationPage(
+                    job_id=job_id,
+                    page_number=page_num,
+                    original_path=img_path,
+                    phase_status="pending",
+                    processing_status="processing"
+                )
+                db.add(page)
+            else:
+                # Reset existing page
+                page.phase_status = "pending"
+                page.processing_status = "processing"
+                page.error_message = None
+                page.regions_json = None
+                page.translated_path = None
+                
+            pages_to_process.append(page)
+
+        await db.commit()
+        for p in pages_to_process:
+            await db.refresh(p)
+
+        # ════════════════════════════════════════════════════════════════════════
+        # PASS 1: Detection + OCR (Stages 1-3)
+        # ════════════════════════════════════════════════════════════════════════
+        ocr_results = {} # page_num -> regions
+
+        for page in pages_to_process:
+            try:
+                print(f"[Pipeline] OCR Stage for Page {page.page_number}")
+                page.phase_status = "detecting"
+                await db.commit()
+                
+                with open(page.original_path, "rb") as f:
+                    img_b64 = base64.b64encode(f.read()).decode("utf-8")
+                
+                regions = await ai_client.ocr_pipeline(img_b64)
+                
+                if not regions:
+                    print(f"[Pipeline] Page {page.page_number}: No text detected")
+                    page.phase_status = "completed"
+                    page.processing_status = "no_text"
+                    page.has_text = False
+                else:
+                    page.phase_status = "ocr" # Signal OCR completion
+                    ocr_results[page.page_number] = regions
+                
+                await db.commit()
+                
+            except Exception as e:
+                print(f"[Pipeline] OCR Error Page {page.page_number}: {e}")
+                page.phase_status = "failed"
+                page.processing_status = "failed"
+                page.error_message = f"OCR Error: {e}"
+                await db.commit()
+
+        # ════════════════════════════════════════════════════════════════════════
+        # PASS 2: Translation (Stage 5) - WITH RETRY LOGIC
+        # ════════════════════════════════════════════════════════════════════════
+        for page in pages_to_process:
+            # Skip pages that failed step 1 or have no text
+            if page.page_number not in ocr_results:
+                continue
+                
+            regions = ocr_results[page.page_number]
+            
+            # FIX 2: RETRY LOOP for LLM Non-Determinism
+            max_retries = 3
+            success = False
+            
+            for attempt in range(max_retries):
+                try:
+                    if attempt == 0:
+                        print(f"[Pipeline] Translating Page {page.page_number}")
+                    else:
+                        print(f"[Pipeline] Retry {attempt+1}/{max_retries} for Page {page.page_number}")
+                        
+                    page.phase_status = "translating"
+                    await db.commit()
+                    
+                    # Call AI Server
+                    translated_regions = await ai_client.translate_batch(regions)
+                    
+                    page.regions_json = json.dumps(translated_regions, ensure_ascii=False)
+                    page.translated_path = str(page.original_path) 
+                    page.has_text = True
+                    page.phase_status = "done"
+                    page.processing_status = "completed"
+                    await db.commit()
+                    
+                    success = True
+                    break # Success! Exit retry loop
+                    
+                except Exception as e:
+                    print(f"[Pipeline] Attempt {attempt+1} failed for Page {page.page_number}: {e}")
+                    import asyncio
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(2) 
+
+            if not success:
+                page.phase_status = "failed"
+                page.error_message = "Translation failed after 3 attempts"
+                await db.commit()
+
+        # ── Mark job complete ────────────────────────────────────────────────────
+        if job.status != "failed":
+            job.status = "completed"
+            job.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+            print(f"[Pipeline] Job {job_id} Finished")
+
+    except Exception as e:
+        print(f"[Pipeline] CATASTROPHIC JOB FAILURE: {e}")
+        await db.rollback()
+        job.status = "failed"
+        job.error_message = f"Catastrophic pipeline error: {str(e)}"
+        await db.commit()
+
+# ─── CRUD Helper Methods ──────────────────────────────────────────────────
+
+async def create_zip_stream(job_id: UUID, db: AsyncSession) -> AsyncGenerator[bytes, None]:
+    stmt = select(TranslationPage).where(TranslationPage.job_id == job_id).order_by(TranslationPage.page_number)
+    result = await db.execute(stmt)
+    pages = result.scalars().all()
+
+    file_paths = []
+    for page in pages:
+        source_path = page.translated_path or page.original_path
+        if source_path and Path(source_path).exists():
+            name_in_zip = f"page_{page.page_number:03d}{Path(source_path).suffix}"
+            file_paths.append((source_path, name_in_zip))
+
+    async for chunk in generate_zip_stream(file_paths):
+        yield chunk
+
+async def create_translation_job(db: AsyncSession, user_id: UUID, filename: str, file_size: int, source_lang: str, target_lang: str) -> TranslationJob:
+    job = TranslationJob(
+        user_id=user_id, 
+        original_filename=filename, 
+        file_path="", 
+        file_size_bytes=file_size, 
+        source_language=source_lang, 
+        target_language=target_lang
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+    return job
+
+async def update_job_file_path(db: AsyncSession, job_id: UUID, file_path: str) -> TranslationJob:
+    job = await db.get(TranslationJob, job_id)
+    job.file_path = file_path
+    await db.commit()
+    await db.refresh(job)
+    return job
+
+async def get_user_jobs(db: AsyncSession, user_id: UUID, skip: int, limit: int) -> list[TranslationJob]:
+    stmt = select(TranslationJob).where(TranslationJob.user_id == user_id).order_by(desc(TranslationJob.created_at)).offset(skip).limit(limit)
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+async def get_job_detail(db: AsyncSession, user_id: UUID, job_id: str) -> TranslationJob:
+    stmt = select(TranslationJob).where(
+        TranslationJob.id == job_id, 
+        TranslationJob.user_id == user_id
+    ).options(selectinload(TranslationJob.pages))
+    
+    result = await db.execute(stmt)
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+async def reset_job_for_retranslation(db: AsyncSession, user_id: UUID, job_id: UUID) -> TranslationJob:
+    stmt = select(TranslationJob).where(
+        TranslationJob.id == job_id, 
+        TranslationJob.user_id == user_id
+    ).options(selectinload(TranslationJob.pages))
+    
+    result = await db.execute(stmt)
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+        
+    job.status = "pending"
+    job.error_message = None
+    job.completed_at = None
+    
+    for page in job.pages:
+        page.processing_status = "pending"
+        page.phase_status = "pending"
+        page.regions_json = None
+        page.translated_path = None
+        page.error_message = None
+        page.has_text = False
+        page.processing_ms = None
+    
+    await db.commit()
+    await db.refresh(job)
+    return job
+
+async def delete_translation_job(db: AsyncSession, user_id: UUID, job_id: UUID) -> None:
+    stmt = select(TranslationJob).where(TranslationJob.id == job_id, TranslationJob.user_id == user_id)
+    result = await db.execute(stmt)
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+        
+    job_dir = file_service.get_upload_dir(user_id, job.id)
+    if job_dir.exists():
+        shutil.rmtree(job_dir)
+        
+    await db.delete(job)
+    await db.commit()
+
+async def get_page_file_path(db: AsyncSession, user_id: UUID, job_id: UUID, page_num: int, image_type: str) -> str:
+    stmt = select(TranslationPage).join(TranslationJob).where(
+        TranslationJob.user_id == user_id,
+        TranslationPage.job_id == job_id,
+        TranslationPage.page_number == page_num
+    )
+    result = await db.execute(stmt)
+    page = result.scalar_one_or_none()
+    
+    if not page:
+        raise HTTPException(status_code=404, detail=f"Page {page_num} not found")
+        
+    target_path = page.translated_path if image_type == "translated" else page.original_path
+    
+    if not target_path or not Path(target_path).exists():
+        if image_type == "original":
+             raise HTTPException(status_code=404, detail="Original image missing")
+        raise HTTPException(status_code=404, detail="Translated image not generated")
+        
+    return str(target_path)
+
+
+async def count_translated_pages(db: AsyncSession, user_id: UUID) -> int:
+    """Count total translation pages with status done, for dashboard stats."""
+    from sqlalchemy import func as sa_func
+    stmt = (
+        select(sa_func.count(TranslationPage.id))
+        .join(TranslationJob, TranslationPage.job_id == TranslationJob.id)
+        .where(
+            TranslationJob.user_id == user_id,
+            TranslationPage.processing_status == "completed",
+        )
+    )
+    result = await db.execute(stmt)
+    return result.scalar_one() or 0
+</file>
+
+<file path="backend/app/utils/ai_client.py">
+import json
+from typing import AsyncGenerator
+import httpx
+
+from app.core.config import settings
+
+
+class AIServerError(Exception):
+    def __init__(self, status_code: int, message: str):
+        self.status_code = status_code
+        self.message = message
+        super().__init__(message)
+
+
+class AIServerClient:
+    """Singleton async HTTP client for communicating with the AI inference server."""
+
+    def __init__(self):
+        self.base_url = settings.AI_SERVER_URL   # reads from .env → AI_SERVER_URL
+        self._client: httpx.AsyncClient | None = None
+
+    @property
+    def client(self) -> httpx.AsyncClient:
+        if not self._client:
+            self._client = httpx.AsyncClient(base_url=self.base_url, timeout=300.0)
+        return self._client
+
+    async def chat_stream(
+        self,
+        messages: list[dict],
+        model: str,
+        max_tokens: int | None = None,   # None → AI server uses its .env MAX_TOKENS
+        temperature: float = 0.7,
+    ) -> AsyncGenerator[str, None]:
+        """
+        POST /v1/chat/completions with stream=True.
+        Omits max_tokens from payload when None so the AI server's own
+        .env MAX_TOKENS setting (32768) is used instead of a hardcoded default.
+        """
+        payload: dict = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            "temperature": temperature,
+        }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+
+        async with self.client.stream("POST", "/v1/chat/completions", json=payload) as response:
+            response.raise_for_status()
+
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    data = line[6:].strip()
+
+                    if data == "[DONE]":
+                        return
+
+                    if not data:
+                        continue
+
+                    try:
+                        parsed = json.loads(data)
+                        choices = parsed.get("choices", [])
+                        if choices:
+                            token = choices[0].get("delta", {}).get("content", "")
+                            if token:
+                                yield token
+                    except json.JSONDecodeError:
+                        continue
+
+    async def translate_image_vision_stream(
+        self,
+        image_base64: str,
+        source_language: str,
+        target_language: str,
+    ) -> AsyncGenerator[str | dict, None]:
+
+        payload = {
+            "image": image_base64,
+            "source_language": source_language,
+            "target_language": target_language,
+        }
+
+        # Use settings.AI_SERVER_URL — never hardcode 127.0.0.1
+        ai_url = f"{settings.AI_SERVER_URL}/v1/translate/image/stream"
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(None)) as client:
+            try:
+                async with client.stream("POST", ai_url, json=payload) as response:
+                    response.raise_for_status()
+
+                    async for line in response.aiter_lines():
+                        if line.startswith("data: "):
+                            data_str = line[6:].strip()
+                            if data_str:
+                                yield data_str
+
+            except Exception as e:
+                yield {"error": f"AI Client connection error: {str(e)}", "done": True}
+
+    async def translate_image(
+        self,
+        image_base64: str,
+        source_language: str,
+        target_language: str,
+    ) -> dict:
+        """POST /v1/translate/image. Returns {translated_text, bounding_boxes, original_text}."""
+        response = await self.client.post("/v1/translate/image", json={
+            "image": image_base64,
+            "source_language": source_language,
+            "target_language": target_language,
+        })
+        response.raise_for_status()
+        return response.json()
+
+    async def list_models(self) -> list[dict]:
+        """GET /v1/models. Returns list of available model info."""
+        response = await self.client.get("/v1/models")
+        response.raise_for_status()
+        return response.json().get("data", [])
+
+    async def health_check(self) -> bool:
+        """Returns True if AI server is healthy and model is loaded."""
+        try:
+            response = await self.client.get("/v1/health", timeout=5.0)
+            return response.json().get("model_loaded", False)
+        except Exception:
+            return False
+
+    async def ocr_pipeline(self, image_base64: str) -> list[dict]:
+        """
+        POST /v1/translate/ocr-pipeline
+        Executes Stages 1+2+3 on the AI server in one shot.
+        Returns: [{"bbox": [x1,y1,x2,y2], "japanese": "text"}, ...]
+        """
+        try:
+            response = await self.client.post(
+                "/v1/translate/ocr-pipeline",
+                json={"image": image_base64},
+                timeout=120.0,
+            )
+            response.raise_for_status()
+            return response.json()["regions"]
+        except httpx.ConnectError as e:
+            raise AIServerError(503, f"AI server unreachable: {e}") from e
+        except httpx.HTTPStatusError as e:
+            raise AIServerError(e.response.status_code, str(e)) from e
+
+    async def translate_batch(self, regions: list[dict]) -> list[dict]:
+        """
+        POST /v1/translate/batch
+        Triggers Hangoff Protocol then translates all regions.
+        Returns regions with 'english' field populated.
+        """
+        try:
+            response = await self.client.post(
+                "/v1/translate/batch",
+                json={"regions": regions},
+                timeout=600.0,
+            )
+            response.raise_for_status()
+            return response.json()["regions"]
+        except httpx.ConnectError as e:
+            raise AIServerError(503, f"AI server unreachable: {e}") from e
+        except httpx.HTTPStatusError as e:
+            raise AIServerError(e.response.status_code, str(e)) from e
+
+
+# Singleton instance — import this in services
+ai_client = AIServerClient()
+</file>
+
+<file path="frontend/src/components/chat/ChatInput.tsx">
+import React, { useState, useRef, useEffect } from 'react';
+import { Send, Square } from 'lucide-react';
+import { useChatStore } from '@/store/chatStore';
+import { cn } from '@/lib/utils';
+
+export const ChatInput = () => {
+  const [content, setContent] = useState('');
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  
+  // Assumes stopGeneration exists in your store (see snippet below)
+  const { sendMessage, isStreaming, stopGeneration } = useChatStore();
+
+  const CHAR_WARN = 2000;
+  const CHAR_LIMIT = 4000;
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (textarea) {
+      textarea.style.height = 'auto';
+      const newHeight = Math.min(textarea.scrollHeight, 160);
+      textarea.style.height = `${newHeight}px`;
+    }
+  }, [content]);
+
+  const handleSubmit = async () => {
+    if (!content.trim() || isStreaming || content.length > CHAR_LIMIT) return;
+    const messageToSend = content.trim();
+    setContent(''); 
+    try { await sendMessage(messageToSend); } 
+    catch (error) { setContent(messageToSend); }
+  };
+
+  const handleStop = () => {
+    if (stopGeneration) {
+      stopGeneration();
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSubmit();
+    }
+  };
+
+  const isOverLimit = content.length > CHAR_LIMIT;
+  const isNearLimit = content.length > CHAR_WARN && content.length <= CHAR_LIMIT;
+
+  return (
+    <div className="w-full relative">
+        
+        {content.length > 1500 && (
+          <div className={cn(
+            "absolute -top-8 right-2 text-[10px] font-mono px-2 py-0.5 rounded-md border backdrop-blur-md animate-in fade-in slide-in-from-bottom-1",
+            isOverLimit ? "bg-red-500/20 text-red-400 border-red-500/30" : isNearLimit ? "bg-amber-500/20 text-amber-400 border-amber-500/30" : "bg-black/40 text-white/40 border-white/10"
+          )}>
+            {content.length.toLocaleString()} / {CHAR_LIMIT.toLocaleString()}
+          </div>
+        )}
+
+        {/* Glassy input background */}
+        <div className={cn(
+          "relative flex items-end gap-2 p-2 rounded-2xl bg-black/40 backdrop-blur-md border border-white/10 transition-all duration-200 shadow-xl",
+          "ml-10 md:ml-[52px]",
+          isOverLimit ? "border-red-500/50" : isNearLimit ? "focus-within:border-amber-400" : "focus-within:border-primary-500/50 focus-within:ring-1 focus-within:ring-primary-500/20"
+        )}>
+          <textarea
+            ref={textareaRef}
+            rows={1}
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={isStreaming ? "Kyuna is thinking..." : "Ask Kyuna anything..."}
+            disabled={isStreaming} // Keep input disabled while thinking to prevent confused state
+            className="flex-1 bg-transparent border-none outline-none text-white text-sm py-2 px-3 resize-none custom-scrollbar placeholder:text-white/40 disabled:cursor-not-allowed"
+          />
+
+          <button
+            onClick={isStreaming ? handleStop : handleSubmit}
+            // Enable button if content is ready OR if we are streaming (so we can stop)
+            disabled={(!content.trim() && !isStreaming) || isOverLimit}
+            className={cn(
+              "mb-1 p-2 rounded-xl transition-all flex items-center justify-center shrink-0",
+              (content.trim() || isStreaming) && !isOverLimit
+                ? "bg-primary-600 text-white shadow-lg hover:bg-primary-500 active:scale-95"
+                : "bg-white/5 text-white/30 cursor-not-allowed"
+            )}
+            aria-label={isStreaming ? "Stop generation" : "Send message"}
+          >
+            {isStreaming ? (
+              <Square size={14} className="fill-white animate-pulse" />
+            ) : (
+              <Send size={18} />
+            )}
+          </button>
+      </div>
+    </div>
+  );
+};
+
+export default ChatInput;
+</file>
+
 <file path="frontend/src/components/chat/ChatWindow.tsx">
 import { useEffect, useRef, useState, type UIEvent } from 'react';
 import { Bot, ArrowDown } from 'lucide-react';
@@ -13487,6 +13926,68 @@ export const ChatWindow = () => {
 };
 
 export default ChatWindow;
+</file>
+
+<file path="frontend/src/components/ui/ThemeBackground.tsx">
+import { useState } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { useSettingsStore } from '@/store/settingsStore'
+
+const THEME_ASSETS: Record<string, string> = {
+  'night-garden': '/assets/backgrounds/night-garden.mp4',
+  'rainy-city':   '/assets/backgrounds/rainy-city.mp4',
+  'space':        '/assets/backgrounds/space.mp4',
+  'forest':       '/assets/backgrounds/forest.mp4',
+}
+
+export const ThemeBackground = () => {
+  const currentTheme   = useSettingsStore(s => s.theme)
+  const customWallpaper = useSettingsStore(s => s.customWallpaper)
+  const [hasError, setHasError] = useState(false)
+
+  const videoSrc = THEME_ASSETS[currentTheme] || THEME_ASSETS['night-garden']
+
+  return (
+    <div className="absolute inset-0 z-0 overflow-hidden bg-surface-950">
+      <AnimatePresence mode="popLayout">
+        {customWallpaper ? (
+          <motion.div
+            key="custom-bg"
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            transition={{ duration: 1.2, ease: 'easeInOut' }}
+            className="absolute inset-0 bg-cover bg-center"
+            style={{ backgroundImage: `url(${customWallpaper})` }}
+          />
+        ) : hasError ? (
+          <motion.div
+            key="fallback-bg"
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="absolute inset-0 bg-gradient-to-br from-surface-900 via-black to-surface-950"
+          />
+        ) : (
+          <motion.div
+            key={currentTheme}
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            transition={{ duration: 1.2, ease: 'easeInOut' }}
+            className="absolute inset-0 h-full w-full"
+          >
+            <video
+              autoPlay loop muted playsInline
+              onError={() => setHasError(true)}
+              className="h-full w-full object-cover"
+            >
+              <source src={videoSrc} type="video/mp4" />
+            </video>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <div className="absolute inset-0 bg-black/20" />
+    </div>
+  )
+}
+
+export default ThemeBackground
 </file>
 
 <file path="frontend/src/index.css">
@@ -13718,544 +14219,6 @@ export default function ChatbotPage() {
     </div>
   )
 }
-</file>
-
-<file path="frontend/src/pages/HomePage.tsx">
-import { useEffect, useState, useRef } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Image as ImageIcon, Settings, User, LogOut, FilePlus, Calculator, MonitorPlay } from 'lucide-react';
-import NotepadModal from '@/components/notes/NotepadModal';
-import SettingsModal from '@/components/settings/SettingsModal';
-import { useNoteStore } from '@/store/noteStore';
-import { useAuthStore } from '@/store/authStore';
-import NotesManagerModal from '@/components/notes/NotesManagerModal';
-import CalculatorModal from '@/components/calculator/CalculatorModal';
-import { useWidgetStore } from '@/store/widgetStore';
-import MiniYoutube from '@/components/ui/MiniYoutube';
-
-// --- Digital Clock Component ---
-const DigitalClock = () => {
-  const [time, setTime] = useState(new Date());
-  useEffect(() => {
-    const timer = setInterval(() => setTime(new Date()), 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  return (
-    <div className="flex flex-col items-center drop-shadow-2xl text-white select-none font-['Caveat_Brush']">
-      <h1 className="text-[6rem] md:text-[10rem] font-normal leading-none tracking-wider">
-        {time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}
-      </h1>
-      <p className="text-lg md:text-2xl font-medium tracking-widest uppercase opacity-80 mt-4 md:mt-6">
-        {time.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}
-      </p>
-    </div>
-  );
-};
-
-export default function HomePage() {
-  const notes = useNoteStore(state => state.notes);
-  const isManagerOpen = useNoteStore(state => state.isManagerOpen);
-  const addNote = useNoteStore(state => state.addNote); // <-- Brought in addNote
-  
-  const user = useAuthStore(state => state.user);
-  const logout = useAuthStore(state => state.logout);
-
-  const [showDropdown, setShowDropdown] = useState(false);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-  const [isCalculatorOpen, setIsCalculatorOpen] = useState(false);
-
-  const isYoutubeOpen = useWidgetStore(state => state.isYoutubeOpen);
-  const setYoutubeOpen = useWidgetStore(state => state.setYoutubeOpen);
-
-  // Close dropdown if user clicks anywhere outside of it
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setShowDropdown(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        localStorage.setItem('kyuna-bg', reader.result as string);
-        window.dispatchEvent(new Event('bg-updated'));
-      };
-      reader.readAsDataURL(file);
-    }
-    setShowDropdown(false); 
-  };
-
-  return (
-    <div className="relative h-full w-full flex flex-col items-center justify-center p-8 overflow-hidden">
-      
-      {/* Top Right Controls Container - Now a flex row to hold multiple buttons! */}
-      <div className="absolute top-6 right-6 z-30 flex items-center gap-3">
-        
-        {/* Calculator Button */}
-        <button 
-          onClick={() => setIsCalculatorOpen(true)}
-          className="w-10 h-10 flex items-center justify-center bg-black/40 hover:bg-black/60 border border-white/10 text-white/60 hover:text-primary-400 rounded-full transition-all active:scale-95 shadow-xl backdrop-blur-md"
-          title="Open Calculator"
-        >
-          <Calculator size={18} />
-        </button>
-
-        {/* Youtube Button */}
-        <button
-          onClick={() => setYoutubeOpen(true)}
-          className="w-10 h-10 flex items-center justify-center bg-black/40 hover:bg-black/60 border border-white/10 rounded-full backdrop-blur-md cursor-pointer transition-all text-white/80 hover:text-red-400 shadow-xl"
-          title="Mini YouTube Player"
-        >
-          <MonitorPlay size={18} />
-        </button>
-
-        {/* Quick Note Button */}
-        <button 
-          onClick={() => addNote()}
-          className="w-10 h-10 flex items-center justify-center bg-black/40 hover:bg-black/60 border border-white/10 text-white/60 hover:text-primary-400 rounded-full transition-all active:scale-95 shadow-xl backdrop-blur-md"
-          title="Create New Note"
-        >
-          <FilePlus size={18} />
-        </button>
-
-        {/* User Dropdown */}
-        <div className="relative" ref={dropdownRef}>
-          <button
-            onClick={() => setShowDropdown(!showDropdown)}
-            className="w-10 h-10 flex items-center justify-center bg-black/40 hover:bg-black/60 border border-white/10 rounded-full backdrop-blur-md cursor-pointer transition-all text-white/80 hover:text-white shadow-xl"
-          >
-            {user?.username ? (
-              <span className="font-bold text-sm uppercase">{user.username.charAt(0)}</span>
-            ) : (
-              <User size={18} />
-            )}
-          </button>
-
-          <AnimatePresence>
-            {showDropdown && (
-              <motion.div
-                initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                transition={{ duration: 0.15, ease: 'easeOut' }}
-                className="absolute right-0 top-full mt-3 w-56 bg-black/60 backdrop-blur-xl border border-white/10 rounded-2xl p-2 shadow-2xl flex flex-col gap-1"
-              >
-                <div className="px-3 py-2 border-b border-white/10 mb-1">
-                  <p className="text-[10px] text-white/40 uppercase font-bold tracking-widest">Account</p>
-                  <p className="text-sm text-white font-medium truncate">{user?.username || 'Guest'}</p>
-                </div>
-
-                <label className="flex items-center gap-3 px-3 py-2.5 text-sm text-white/70 hover:bg-white/10 hover:text-white rounded-xl transition-colors cursor-pointer group">
-                  <ImageIcon size={16} className="opacity-70 group-hover:opacity-100 transition-opacity" />
-                  Change Wallpaper
-                  <input type="file" accept="image/jpeg, image/png, image/webp" className="hidden" onChange={handleImageUpload} />
-                </label>
-
-                <button 
-                  onClick={() => { setIsSettingsOpen(true); setShowDropdown(false); }} 
-                  className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-white/70 hover:bg-white/10 hover:text-white rounded-xl transition-colors group text-left"
-                >
-                  <Settings size={16} className="opacity-70 group-hover:opacity-100 transition-opacity" />
-                  Settings
-                </button>
-
-                <div className="h-px bg-white/10 my-1 mx-2" />
-
-                <button 
-                  onClick={logout} 
-                  className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-red-400/80 hover:bg-red-500/20 hover:text-red-400 rounded-xl transition-colors group text-left"
-                >
-                  <LogOut size={16} className="opacity-70 group-hover:opacity-100 transition-opacity" />
-                  Logout
-                </button>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-      </div>
-
-      {/* Center Clock */}
-      <div className="relative z-10 flex-1 flex flex-col items-center justify-center w-full">
-        <DigitalClock />
-      </div>
-
-      {/* Render floating Notepads (Only if they are set to open) */}
-      <AnimatePresence>
-        {notes.filter(n => n.isOpen).map(note => (
-          <NotepadModal key={note.id} note={note} />
-        ))}
-      </AnimatePresence>
-
-      {/* Notes Manager Modal */}
-      <AnimatePresence>
-        {isManagerOpen && <NotesManagerModal />}
-      </AnimatePresence>
-
-      {/* Settings Modal */}
-      <AnimatePresence>
-        {isSettingsOpen && <SettingsModal onClose={() => setIsSettingsOpen(false)} />}
-      </AnimatePresence>
-
-      {/* Calculator Modal */}
-      <AnimatePresence>
-        {isCalculatorOpen && <CalculatorModal onClose={() => setIsCalculatorOpen(false)} />}
-      </AnimatePresence>
-
-      {/* Floating Mini YouTube Player */}
-        <AnimatePresence>
-          {isYoutubeOpen && <MiniYoutube onClose={() => setYoutubeOpen(false)} />}
-        </AnimatePresence>
-    </div>
-  );
-}
-</file>
-
-<file path="frontend/src/store/chatStore.ts">
-import { create } from 'zustand'
-import { chatService } from '@/services/chat.service'
-import type { Conversation, ConversationWithMessages } from '@/services/chat.service'
-import type { Message } from '@/types/chat.types'
-import { useSettingsStore } from './settingsStore'
-
-export type { Conversation, Message }
-
-interface ChatState {
-  conversations: Conversation[]
-  activeConversationId: string | null
-  messages: Record<string, Message[]>
-  isStreaming: boolean
-  currentStreamContent: string
-  selectedModel: string
-  _abortController: AbortController | null
-
-  loadConversations: () => Promise<void>
-  selectConversation: (id: string) => Promise<void>
-  createConversation: () => Promise<Conversation | undefined>
-  deleteConversation: (id: string) => Promise<void>
-  updateConversationTitle: (id: string, title: string) => Promise<void> // NEW: Added to interface
-  sendMessage: (content: string) => Promise<void>
-  setModel: (model: string) => void
-  appendStreamToken: (token: string) => void
-  finalizeStream: (fullContent: string) => void
-}
-
-export const useChatStore = create<ChatState>((set, get) => ({
-  conversations: [],
-  activeConversationId: null,
-  messages: {},
-  isStreaming: false,
-  currentStreamContent: '',
-  selectedModel: useSettingsStore.getState().chatModel ?? 'llama-3.1-8b-instruct-q4_k_m.gguf',
-  _abortController: null,
-
-  loadConversations: async () => {
-    try {
-      const conversations = await chatService.getConversations()
-      set({ conversations })
-    } catch (error) {
-      console.error('Failed to load conversations:', error)
-    }
-  },
-
-  selectConversation: async (id) => {
-    set({ activeConversationId: id, currentStreamContent: '' })
-
-    if (!get().messages[id]) {
-      try {
-        const data: ConversationWithMessages = await chatService.getConversation(id)
-        set(state => ({
-          messages: { ...state.messages, [id]: data.messages ?? [] },
-        }))
-      } catch (error) {
-        console.error('Failed to load message history:', error)
-      }
-    }
-  },
-
-  createConversation: async () => {
-    try {
-      const newConv = await chatService.createConversation()
-      set(state => ({
-        conversations: [newConv, ...state.conversations],
-        activeConversationId: newConv.id,
-        messages: { ...state.messages, [newConv.id]: [] },
-      }))
-      return newConv
-    } catch (error) {
-      console.error('Failed to create conversation:', error)
-      return undefined
-    }
-  },
-
-  deleteConversation: async (id) => {
-    try {
-      await chatService.deleteConversation(id)
-      set(state => {
-        const { [id]: _removed, ...remainingMessages } = state.messages
-        return {
-          conversations: state.conversations.filter(c => c.id !== id),
-          messages: remainingMessages,
-          activeConversationId:
-            state.activeConversationId === id ? null : state.activeConversationId,
-        }
-      })
-    } catch (error) {
-      console.error('Failed to delete conversation:', error)
-    }
-  },
-
-  // NEW: Store implementation
-  updateConversationTitle: async (id, title) => {
-    // Optimistic UI update
-    set(state => ({
-      conversations: state.conversations.map(conv => 
-        conv.id === id ? { ...conv, title } : conv
-      )
-    }))
-
-    try {
-      await chatService.updateConversationTitle(id, title)
-    } catch (error) {
-      console.error('Failed to update conversation title:', error)
-      // If needed, you can reload conversations here to revert the UI on failure
-    }
-  },
-
-  sendMessage: async (content) => {
-    const { activeConversationId, selectedModel, isStreaming, _abortController } = get()
-    if (!activeConversationId) return
-
-    if (isStreaming && _abortController) {
-      _abortController.abort()
-    }
-
-    const controller = new AbortController()
-    set({ _abortController: controller })
-
-    const userMessage: Message = {
-      id: `optimistic-${Date.now()}`,
-      conversation_id: activeConversationId,
-      role: 'user',
-      content,
-      tokens_used: null,
-      generation_ms: null,
-      model_used: null,
-      created_at: new Date().toISOString(),
-      timestamp: new Date().toISOString(), 
-    }
-
-    set(state => ({
-      isStreaming: true,
-      currentStreamContent: '',
-      messages: {
-        ...state.messages,
-        [activeConversationId]: [
-          ...(state.messages[activeConversationId] ?? []),
-          userMessage,
-        ],
-      },
-    }))
-
-    try {
-      const stream = chatService.sendMessageStream(
-        activeConversationId,
-        content,
-        selectedModel,
-        controller.signal,
-        
-      )
-
-      let fullContent = ''
-      let textBuffer = ''
-      let lastUpdateTime = Date.now()
-      const THROTTLE_MS = 50
-
-      for await (const token of stream) {
-        fullContent += token
-        textBuffer += token
-
-        if (Date.now() - lastUpdateTime > THROTTLE_MS) {
-          get().appendStreamToken(textBuffer)
-          textBuffer = ''
-          lastUpdateTime = Date.now()
-        }
-      }
-
-      if (textBuffer.length > 0) {
-        get().appendStreamToken(textBuffer)
-      }
-
-      get().finalizeStream(fullContent)
-    } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') return
-      console.error('Streaming error:', error)
-      set({ isStreaming: false, currentStreamContent: '' })
-    }
-  },
-
-  setModel: (model) => set({ selectedModel: model }),
-
-  appendStreamToken: (tokenChunk) => {
-    set(state => ({ currentStreamContent: state.currentStreamContent + tokenChunk }))
-  },
-
-  finalizeStream: (fullContent) => {
-    const { activeConversationId, selectedModel } = get()
-    if (!activeConversationId) return
-
-    const assistantMessage: Message = {
-      id: `optimistic-${Date.now() + 1}`,
-      conversation_id: activeConversationId,
-      role: 'assistant',
-      content: fullContent,
-      tokens_used: null,
-      generation_ms: null,
-      model_used: selectedModel,
-      created_at: new Date().toISOString(),
-      timestamp: new Date().toISOString(), 
-    }
-
-    set(state => ({
-      isStreaming: false,
-      currentStreamContent: '',
-      _abortController: null,
-      messages: {
-        ...state.messages,
-        [activeConversationId]: [
-          ...(state.messages[activeConversationId] ?? []),
-          assistantMessage,
-        ],
-      },
-    }))
-  },
-}))
-</file>
-
-<file path="frontend/src/store/settingsStore.ts">
-import { create } from 'zustand'
-import { persist, createJSONStorage } from 'zustand/middleware'
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-export type ThemeType = 'night-garden' | 'rainy-city' | 'space' | 'forest'
-
-export interface MusicLink {
-  id: string;
-  title: string;
-  url: string;
-}
-
-export interface MusicGroup {
-  id: string;
-  name: string;
-  links: MusicLink[];
-}
-
-// ─── State Interface ──────────────────────────────────────────────────────────
-
-interface SettingsState {
-  // Appearance
-  theme: ThemeType
-  fontSize: number
-
-  // Music
-  musicUrl: string
-  musicGroups: MusicGroup[] // <--- NEW: Stores all your playlists
-
-  // Pomodoro Config
-  pomodoroWork: number
-  pomodoroShortBreak: number
-  pomodoroLongBreak: number
-  autoStartBreaks: boolean
-  notificationSound: boolean
-
-  // AI Models
-  chatModel: string | null
-  visionModel: string | null
-
-  // Actions
-  setTheme: (theme: ThemeType) => void
-  setFontSize: (size: number) => void
-  setMusicUrl: (url: string) => void
-  setMusicGroups: (groups: MusicGroup[]) => void // <--- NEW: Action to update groups
-  setPomodoroWork: (min: number) => void
-  setPomodoroShortBreak: (min: number) => void
-  setPomodoroLongBreak: (min: number) => void
-  setToggle: (key: 'autoStartBreaks' | 'notificationSound', value: boolean) => void
-  setChatModel: (model: string) => void
-  setVisionModel: (model: string) => void
-}
-
-// ─── Store ────────────────────────────────────────────────────────────────────
-
-export const useSettingsStore = create<SettingsState>()(
-  persist(
-    (set) => ({
-      // ── Initial State ──────────────────────────────────────────────────────
-      theme: 'night-garden',
-      fontSize: 16,
-      musicUrl: 'https://www.youtube.com/watch?v=jfKfPfyJRdk', 
-
-      // Initialize with default presets so you don't lose them!
-      musicGroups: [
-        {
-          id: 'default-preset',
-          name: 'Curated Presets',
-          links: [
-            { id: 'p1', title: 'Lo-fi Hip Hop', url: 'https://youtube.com/watch?v=jfKfPfyJRdk' },
-            { id: 'p2', title: 'Chillhop', url: 'https://youtube.com/watch?v=5yx6BWlEVcU' },
-            { id: 'p3', title: 'Smooth Jazz', url: 'https://youtube.com/watch?v=neV3EPgvZ3g' }
-          ]
-        }
-      ],
-
-      pomodoroWork: 25,
-      pomodoroShortBreak: 5,
-      pomodoroLongBreak: 15,
-      autoStartBreaks: false,
-      notificationSound: true,
-
-      chatModel: null,
-      visionModel: null,
-
-      // ── Actions ────────────────────────────────────────────────────────────
-      setTheme: (theme) => set({ theme }),
-
-      setFontSize: (size) => {
-        const clamped = Math.min(Math.max(size, 12))
-        document.documentElement.style.fontSize = `${clamped}px`
-        set({ fontSize: clamped })
-      },
-
-      setMusicUrl: (musicUrl) => set({ musicUrl }),
-      setMusicGroups: (musicGroups) => set({ musicGroups }),
-
-      setPomodoroWork: (pomodoroWork) => set({ pomodoroWork }),
-      setPomodoroShortBreak: (pomodoroShortBreak) => set({ pomodoroShortBreak }),
-      setPomodoroLongBreak: (pomodoroLongBreak) => set({ pomodoroLongBreak }),
-      setToggle: (key, value) => set({ [key]: value }),
-      setChatModel: (chatModel) => set({ chatModel }),
-      setVisionModel: (visionModel) => set({ visionModel }),
-    }),
-    {
-      name: 'kyuna-settings-storage',
-      storage: createJSONStorage(() => localStorage),
-      onRehydrateStorage: () => (state) => {
-        if (state) {
-          document.documentElement.style.fontSize = `${state.fontSize}px`
-        }
-      },
-    }
-  )
-)
 </file>
 
 <file path="frontend/src/store/translatorStore.ts">
@@ -14754,6 +14717,205 @@ async def chat_completions(request: ChatCompletionRequest):
         }
 </file>
 
+<file path="frontend/src/pages/HomePage.tsx">
+import { useEffect, useState, useRef } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Image as ImageIcon, Settings, User, LogOut, FilePlus, Calculator, MonitorPlay } from 'lucide-react';
+import NotepadModal from '@/components/notes/NotepadModal';
+import SettingsModal from '@/components/settings/SettingsModal';
+import { useNoteStore } from '@/store/noteStore';
+import { useSettingsStore } from '@/store/settingsStore';
+import { useAuthStore } from '@/store/authStore';
+import NotesManagerModal from '@/components/notes/NotesManagerModal';
+import CalculatorModal from '@/components/calculator/CalculatorModal';
+import { useWidgetStore } from '@/store/widgetStore';
+import MiniYoutube from '@/components/ui/MiniYoutube';
+
+// --- Digital Clock Component ---
+const DigitalClock = () => {
+  const [time, setTime] = useState(new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  return (
+    <div className="flex flex-col items-center drop-shadow-2xl text-white select-none font-['Caveat_Brush']">
+      <h1 className="text-[6rem] md:text-[10rem] font-normal leading-none tracking-wider">
+        {time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}
+      </h1>
+      <p className="text-lg md:text-2xl font-medium tracking-widest uppercase opacity-80 mt-4 md:mt-6">
+        {time.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}
+      </p>
+    </div>
+  );
+};
+
+export default function HomePage() {
+  const notes = useNoteStore(state => state.notes);
+  const isManagerOpen = useNoteStore(state => state.isManagerOpen);
+  const addNote = useNoteStore(state => state.addNote); // <-- Brought in addNote
+  
+  const user = useAuthStore(state => state.user);
+  const logout = useAuthStore(state => state.logout);
+
+  const setCustomWallpaper = useSettingsStore(state => state.setCustomWallpaper);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [isCalculatorOpen, setIsCalculatorOpen] = useState(false);
+
+  const isYoutubeOpen = useWidgetStore(state => state.isYoutubeOpen);
+  const setYoutubeOpen = useWidgetStore(state => state.setYoutubeOpen);
+
+  // Close dropdown if user clicks anywhere outside of it
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setShowDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setCustomWallpaper(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+    setShowDropdown(false); 
+  };
+
+  return (
+    <div className="relative h-full w-full flex flex-col items-center justify-center p-8 overflow-hidden">
+      
+      {/* Top Right Controls Container - Now a flex row to hold multiple buttons! */}
+      <div className="absolute top-6 right-6 z-30 flex items-center gap-3">
+        
+        {/* Calculator Button */}
+        <button 
+          onClick={() => setIsCalculatorOpen(true)}
+          className="w-10 h-10 flex items-center justify-center bg-black/40 hover:bg-black/60 border border-white/10 text-white/60 hover:text-primary-400 rounded-full transition-all active:scale-95 shadow-xl backdrop-blur-md"
+          title="Open Calculator"
+        >
+          <Calculator size={18} />
+        </button>
+
+        {/* Youtube Button */}
+        <button
+          onClick={() => setYoutubeOpen(true)}
+          className="w-10 h-10 flex items-center justify-center bg-black/40 hover:bg-black/60 border border-white/10 rounded-full backdrop-blur-md cursor-pointer transition-all text-white/80 hover:text-red-400 shadow-xl"
+          title="Mini YouTube Player"
+        >
+          <MonitorPlay size={18} />
+        </button>
+
+        {/* Quick Note Button */}
+        <button 
+          onClick={() => addNote()}
+          className="w-10 h-10 flex items-center justify-center bg-black/40 hover:bg-black/60 border border-white/10 text-white/60 hover:text-primary-400 rounded-full transition-all active:scale-95 shadow-xl backdrop-blur-md"
+          title="Create New Note"
+        >
+          <FilePlus size={18} />
+        </button>
+
+        {/* User Dropdown */}
+        <div className="relative" ref={dropdownRef}>
+          <button
+            onClick={() => setShowDropdown(!showDropdown)}
+            className="w-10 h-10 flex items-center justify-center bg-black/40 hover:bg-black/60 border border-white/10 rounded-full backdrop-blur-md cursor-pointer transition-all text-white/80 hover:text-white shadow-xl"
+          >
+            {user?.username ? (
+              <span className="font-bold text-sm uppercase">{user.username.charAt(0)}</span>
+            ) : (
+              <User size={18} />
+            )}
+          </button>
+
+          <AnimatePresence>
+            {showDropdown && (
+              <motion.div
+                initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                transition={{ duration: 0.15, ease: 'easeOut' }}
+                className="absolute right-0 top-full mt-3 w-56 bg-black/60 backdrop-blur-xl border border-white/10 rounded-2xl p-2 shadow-2xl flex flex-col gap-1"
+              >
+                <div className="px-3 py-2 border-b border-white/10 mb-1">
+                  <p className="text-[10px] text-white/40 uppercase font-bold tracking-widest">Account</p>
+                  <p className="text-sm text-white font-medium truncate">{user?.username || 'Guest'}</p>
+                </div>
+
+                <label className="flex items-center gap-3 px-3 py-2.5 text-sm text-white/70 hover:bg-white/10 hover:text-white rounded-xl transition-colors cursor-pointer group">
+                  <ImageIcon size={16} className="opacity-70 group-hover:opacity-100 transition-opacity" />
+                  Change Wallpaper
+                  <input type="file" accept="image/jpeg, image/png, image/webp" className="hidden" onChange={handleImageUpload} />
+                </label>
+
+                <button 
+                  onClick={() => { setIsSettingsOpen(true); setShowDropdown(false); }} 
+                  className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-white/70 hover:bg-white/10 hover:text-white rounded-xl transition-colors group text-left"
+                >
+                  <Settings size={16} className="opacity-70 group-hover:opacity-100 transition-opacity" />
+                  Settings
+                </button>
+
+                <div className="h-px bg-white/10 my-1 mx-2" />
+
+                <button 
+                  onClick={logout} 
+                  className="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-red-400/80 hover:bg-red-500/20 hover:text-red-400 rounded-xl transition-colors group text-left"
+                >
+                  <LogOut size={16} className="opacity-70 group-hover:opacity-100 transition-opacity" />
+                  Logout
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      </div>
+
+      {/* Center Clock */}
+      <div className="relative z-10 flex-1 flex flex-col items-center justify-center w-full">
+        <DigitalClock />
+      </div>
+
+      {/* Render floating Notepads (Only if they are set to open) */}
+      <AnimatePresence>
+        {notes.filter(n => n.isOpen).map(note => (
+          <NotepadModal key={note.id} note={note} />
+        ))}
+      </AnimatePresence>
+
+      {/* Notes Manager Modal */}
+      <AnimatePresence>
+        {isManagerOpen && <NotesManagerModal />}
+      </AnimatePresence>
+
+      {/* Settings Modal */}
+      <AnimatePresence>
+        {isSettingsOpen && <SettingsModal onClose={() => setIsSettingsOpen(false)} />}
+      </AnimatePresence>
+
+      {/* Calculator Modal */}
+      <AnimatePresence>
+        {isCalculatorOpen && <CalculatorModal onClose={() => setIsCalculatorOpen(false)} />}
+      </AnimatePresence>
+
+      {/* Floating Mini YouTube Player */}
+        <AnimatePresence>
+          {isYoutubeOpen && <MiniYoutube onClose={() => setYoutubeOpen(false)} />}
+        </AnimatePresence>
+    </div>
+  );
+}
+</file>
+
 <file path="frontend/src/pages/TranslatorPage.tsx">
 import { useEffect } from 'react'
 import { motion } from 'framer-motion'
@@ -14843,6 +15005,456 @@ export default function TranslatorPage() {
     </div>
   )
 }
+</file>
+
+<file path="frontend/src/store/chatStore.ts">
+import { create } from 'zustand'
+import { chatService } from '@/services/chat.service'
+import type { Conversation, ConversationWithMessages } from '@/services/chat.service'
+import type { Message } from '@/types/chat.types'
+import { useSettingsStore } from './settingsStore'
+
+export type { Conversation, Message }
+
+interface ChatState {
+  conversations: Conversation[]
+  activeConversationId: string | null
+  messages: Record<string, Message[]>
+  isStreaming: boolean
+  currentStreamContent: string
+  selectedModel: string
+  _abortController: AbortController | null
+
+  loadConversations: () => Promise<void>
+  selectConversation: (id: string) => Promise<void>
+  createConversation: () => Promise<Conversation | undefined>
+  deleteConversation: (id: string) => Promise<void>
+  updateConversationTitle: (id: string, title: string) => Promise<void>
+  sendMessage: (content: string) => Promise<void>
+  stopGeneration: () => void // <-- NEW: Added to interface
+  setModel: (model: string) => void
+  appendStreamToken: (token: string) => void
+  finalizeStream: (fullContent: string) => void
+}
+
+export const useChatStore = create<ChatState>((set, get) => ({
+  conversations: [],
+  activeConversationId: null,
+  messages: {},
+  isStreaming: false,
+  currentStreamContent: '',
+  selectedModel: useSettingsStore.getState().chatModel ?? 'llama-3.1-8b-instruct-q4_k_m.gguf',
+  _abortController: null,
+
+  loadConversations: async () => {
+    try {
+      const conversations = await chatService.getConversations()
+      set({ conversations })
+    } catch (error) {
+      console.error('Failed to load conversations:', error)
+    }
+  },
+
+  selectConversation: async (id) => {
+    set({ activeConversationId: id, currentStreamContent: '' })
+
+    if (!get().messages[id]) {
+      try {
+        const data: ConversationWithMessages = await chatService.getConversation(id)
+        set(state => ({
+          messages: { ...state.messages, [id]: data.messages ?? [] },
+        }))
+      } catch (error) {
+        console.error('Failed to load message history:', error)
+      }
+    }
+  },
+
+  createConversation: async () => {
+    try {
+      const newConv = await chatService.createConversation()
+      set(state => ({
+        conversations: [newConv, ...state.conversations],
+        activeConversationId: newConv.id,
+        messages: { ...state.messages, [newConv.id]: [] },
+      }))
+      return newConv
+    } catch (error) {
+      console.error('Failed to create conversation:', error)
+      return undefined
+    }
+  },
+
+  deleteConversation: async (id) => {
+    try {
+      await chatService.deleteConversation(id)
+      set(state => {
+        const { [id]: _removed, ...remainingMessages } = state.messages
+        return {
+          conversations: state.conversations.filter(c => c.id !== id),
+          messages: remainingMessages,
+          activeConversationId:
+            state.activeConversationId === id ? null : state.activeConversationId,
+        }
+      })
+    } catch (error) {
+      console.error('Failed to delete conversation:', error)
+    }
+  },
+
+  updateConversationTitle: async (id, title) => {
+    // Optimistic UI update
+    set(state => ({
+      conversations: state.conversations.map(conv => 
+        conv.id === id ? { ...conv, title } : conv
+      )
+    }))
+
+    try {
+      await chatService.updateConversationTitle(id, title)
+    } catch (error) {
+      console.error('Failed to update conversation title:', error)
+    }
+  },
+
+  // NEW: Action to manually stop generation from the UI
+  stopGeneration: () => {
+    // FIX: Removed unused 'isStreaming' from destructuring
+    const { _abortController } = get() 
+    
+    if (_abortController) {
+      _abortController.abort() // Cancel the HTTP request
+      console.log('Generation stopped by user')
+    }
+    // Reset loading state immediately so UI shows "Stopped"
+    set({ isStreaming: false, _abortController: null })
+  },
+
+  sendMessage: async (content) => {
+    const { activeConversationId, selectedModel, isStreaming, _abortController } = get()
+    if (!activeConversationId) return
+
+    // Auto-abort if previous stream is still active
+    if (isStreaming && _abortController) {
+      _abortController.abort()
+    }
+
+    const controller = new AbortController()
+    set({ _abortController: controller })
+
+    const userMessage: Message = {
+      id: `optimistic-${Date.now()}`,
+      conversation_id: activeConversationId,
+      role: 'user',
+      content,
+      tokens_used: null,
+      generation_ms: null,
+      model_used: null,
+      created_at: new Date().toISOString(),
+      timestamp: new Date().toISOString(), 
+    }
+
+    set(state => ({
+      isStreaming: true,
+      currentStreamContent: '',
+      messages: {
+        ...state.messages,
+        [activeConversationId]: [
+          ...(state.messages[activeConversationId] ?? []),
+          userMessage,
+        ],
+      },
+    }))
+
+    // Define fullContent outside try/catch so we can save partial text on abort
+    let fullContent = ''
+
+    try {
+      const stream = chatService.sendMessageStream(
+        activeConversationId,
+        content,
+        selectedModel,
+        controller.signal
+      )
+
+      let textBuffer = ''
+      let lastUpdateTime = Date.now()
+      const THROTTLE_MS = 50
+
+      for await (const token of stream) {
+        fullContent += token
+        textBuffer += token
+
+        if (Date.now() - lastUpdateTime > THROTTLE_MS) {
+          get().appendStreamToken(textBuffer)
+          textBuffer = ''
+          lastUpdateTime = Date.now()
+        }
+      }
+
+      if (textBuffer.length > 0) {
+        get().appendStreamToken(textBuffer)
+      }
+
+      get().finalizeStream(fullContent)
+
+    } catch (error) {
+      // If user clicked Stop, we catch the AbortError here
+      if (error instanceof Error && error.name === 'AbortError') {
+        // Optional: If you want to SAVE what was generated before stopping, 
+        // uncomment the line below:
+        // if (fullContent) get().finalizeStream(fullContent)
+        return
+      }
+      
+      console.error('Streaming error:', error)
+      set({ isStreaming: false, currentStreamContent: '' })
+    }
+  },
+
+  setModel: (model) => set({ selectedModel: model }),
+
+  appendStreamToken: (tokenChunk) => {
+    set(state => ({ currentStreamContent: state.currentStreamContent + tokenChunk }))
+  },
+
+  finalizeStream: (fullContent) => {
+    const { activeConversationId, selectedModel } = get()
+    if (!activeConversationId) return
+
+    const assistantMessage: Message = {
+      id: `optimistic-${Date.now() + 1}`,
+      conversation_id: activeConversationId,
+      role: 'assistant',
+      content: fullContent,
+      tokens_used: null,
+      generation_ms: null,
+      model_used: selectedModel,
+      created_at: new Date().toISOString(),
+      timestamp: new Date().toISOString(), 
+    }
+
+    set(state => ({
+      isStreaming: false,
+      currentStreamContent: '',
+      _abortController: null,
+      messages: {
+        ...state.messages,
+        [activeConversationId]: [
+          ...(state.messages[activeConversationId] ?? []),
+          assistantMessage,
+        ],
+      },
+    }))
+  },
+}))
+</file>
+
+<file path="frontend/src/store/settingsStore.ts">
+import { create } from 'zustand'
+import { persist, createJSONStorage } from 'zustand/middleware'
+import { settingsService } from '@/services/settings.service'
+
+export type ThemeType = 'night-garden' | 'rainy-city' | 'space' | 'forest'
+
+export interface MusicLink {
+  id: string
+  title: string
+  url: string
+}
+
+export interface MusicGroup {
+  id: string
+  name: string
+  links: MusicLink[]
+}
+
+interface SettingsState {
+  // Appearance
+  theme: ThemeType
+  fontSize: number
+  customWallpaper: string | null   // base64 data URL or hosted URL; null = use theme video
+
+  // Music
+  musicUrl: string
+  musicGroups: MusicGroup[]
+
+  // Pomodoro
+  pomodoroWork: number
+  pomodoroShortBreak: number
+  pomodoroLongBreak: number
+  autoStartBreaks: boolean
+  notificationSound: boolean
+
+  // AI Models
+  chatModel: string | null
+  visionModel: string | null
+
+  // ── Lifecycle ──────────────────────────────────────────────────────────────
+  /** Called after login/init — pulls settings from PostgreSQL into this store. */
+  syncFromBackend: () => Promise<void>
+
+  // ── Actions (each immediately syncs to backend) ────────────────────────────
+  setTheme: (theme: ThemeType) => void
+  setFontSize: (size: number) => void
+  setCustomWallpaper: (dataUrl: string | null) => void
+  setMusicUrl: (url: string) => void
+  setMusicGroups: (groups: MusicGroup[]) => void
+  setPomodoroWork: (min: number) => void
+  setPomodoroShortBreak: (min: number) => void
+  setPomodoroLongBreak: (min: number) => void
+  setToggle: (key: 'autoStartBreaks' | 'notificationSound', value: boolean) => void
+  setChatModel: (model: string) => void
+  setVisionModel: (model: string) => void
+}
+
+// Helper — fire-and-forget backend sync, never throws
+function sync(data: Parameters<typeof settingsService.update>[0]) {
+  settingsService.update(data).catch(err =>
+    console.error('[settingsStore] Backend sync failed:', err)
+  )
+}
+
+const DEFAULT_MUSIC_GROUPS: MusicGroup[] = [
+  {
+    id: 'default-preset',
+    name: 'Curated Presets',
+    links: [
+      { id: 'p1', title: 'Lo-fi Hip Hop', url: 'https://youtube.com/watch?v=jfKfPfyJRdk' },
+      { id: 'p2', title: 'Chillhop',      url: 'https://youtube.com/watch?v=5yx6BWlEVcU' },
+      { id: 'p3', title: 'Smooth Jazz',   url: 'https://youtube.com/watch?v=neV3EPgvZ3g' },
+    ],
+  },
+]
+
+export const useSettingsStore = create<SettingsState>()(
+  persist(
+    (set) => ({
+      // ── Defaults (used until syncFromBackend() overwrites them) ────────────
+      theme: 'night-garden',
+      fontSize: 16,
+      customWallpaper: null,
+      musicUrl: 'https://www.youtube.com/watch?v=jfKfPfyJRdk',
+      musicGroups: DEFAULT_MUSIC_GROUPS,
+      pomodoroWork: 25,
+      pomodoroShortBreak: 5,
+      pomodoroLongBreak: 15,
+      autoStartBreaks: false,
+      notificationSound: true,
+      chatModel: null,
+      visionModel: null,
+
+      // ── Hydrate from PostgreSQL ────────────────────────────────────────────
+      syncFromBackend: async () => {
+        try {
+          const s = await settingsService.get()
+          set({
+            theme:             (s.theme as ThemeType) ?? 'night-garden',
+            fontSize:          s.font_size             ?? 16,
+            customWallpaper:   s.custom_wallpaper       ?? null,
+            musicUrl:          s.music_url              ?? 'https://www.youtube.com/watch?v=jfKfPfyJRdk',
+            musicGroups:       s.music_groups           ?? DEFAULT_MUSIC_GROUPS,
+            pomodoroWork:      s.pomodoro_work_minutes  ?? 25,
+            pomodoroShortBreak:s.pomodoro_short_break   ?? 5,
+            pomodoroLongBreak: s.pomodoro_long_break    ?? 15,
+            autoStartBreaks:   s.auto_start_breaks      ?? false,
+            notificationSound: s.notification_sound     ?? true,
+            chatModel:         s.preferred_chat_model   ?? null,
+            visionModel:       s.preferred_vision_model ?? null,
+          })
+          // Apply font size to DOM
+          document.documentElement.style.fontSize = `${s.font_size ?? 16}px`
+        } catch (err) {
+          console.error('[settingsStore] Failed to sync from backend:', err)
+        }
+      },
+
+      // ── Actions ───────────────────────────────────────────────────────────
+      setTheme: (theme) => {
+        set({ theme })
+        sync({ theme })
+      },
+
+      setFontSize: (size) => {
+        const clamped = Math.min(Math.max(size, 12), 24)
+        document.documentElement.style.fontSize = `${clamped}px`
+        set({ fontSize: clamped })
+        sync({ font_size: clamped })
+      },
+
+      setCustomWallpaper: (dataUrl) => {
+        set({ customWallpaper: dataUrl })
+        sync({ custom_wallpaper: dataUrl })
+      },
+
+      setMusicUrl: (musicUrl) => {
+        set({ musicUrl })
+        sync({ music_url: musicUrl })
+      },
+
+      setMusicGroups: (musicGroups) => {
+        set({ musicGroups })
+        sync({ music_groups: musicGroups })
+      },
+
+      setPomodoroWork: (pomodoroWork) => {
+        set({ pomodoroWork })
+        sync({ pomodoro_work_minutes: pomodoroWork })
+      },
+
+      setPomodoroShortBreak: (pomodoroShortBreak) => {
+        set({ pomodoroShortBreak })
+        sync({ pomodoro_short_break: pomodoroShortBreak })
+      },
+
+      setPomodoroLongBreak: (pomodoroLongBreak) => {
+        set({ pomodoroLongBreak })
+        sync({ pomodoro_long_break: pomodoroLongBreak })
+      },
+
+      setToggle: (key, value) => {
+        set({ [key]: value })
+        const backendKey = key === 'autoStartBreaks' ? 'auto_start_breaks' : 'notification_sound'
+        sync({ [backendKey]: value })
+      },
+
+      setChatModel: (chatModel) => {
+        set({ chatModel })
+        sync({ preferred_chat_model: chatModel })
+      },
+
+      setVisionModel: (visionModel) => {
+        set({ visionModel })
+        sync({ preferred_vision_model: visionModel })
+      },
+    }),
+    {
+      name: 'kyuna-settings-storage',
+      storage: createJSONStorage(() => localStorage),
+      // localStorage is the fallback cache — backend is the source of truth.
+      // syncFromBackend() overwrites this cache after every login.
+      partialize: (state) => ({
+        theme:             state.theme,
+        fontSize:          state.fontSize,
+        customWallpaper:   state.customWallpaper,
+        musicUrl:          state.musicUrl,
+        musicGroups:       state.musicGroups,
+        pomodoroWork:      state.pomodoroWork,
+        pomodoroShortBreak:state.pomodoroShortBreak,
+        pomodoroLongBreak: state.pomodoroLongBreak,
+        autoStartBreaks:   state.autoStartBreaks,
+        notificationSound: state.notificationSound,
+        chatModel:         state.chatModel,
+        visionModel:       state.visionModel,
+      }),
+      onRehydrateStorage: () => (state) => {
+        if (state) {
+          document.documentElement.style.fontSize = `${state.fontSize}px`
+        }
+      },
+    }
+  )
+)
 </file>
 
 <file path="ai_server/app/routers/models.py">
