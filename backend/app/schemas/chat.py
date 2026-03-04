@@ -52,8 +52,12 @@ class SendMessageRequest(BaseModel):
 class ModelInfoResponse(BaseModel):
     id: str
     name: str
-    file_size_gb: Optional[float] = None
     type: str = Field(pattern="^(text|vision)$")
+    file_size_gb: Optional[float] = None
+    is_loaded: bool = False
+    size: str = ""
+    context_window: int = 0
+    description: Optional[str] = None
     
 class MessageCreate(BaseModel):
     content: str

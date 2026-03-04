@@ -148,8 +148,12 @@ async def auto_title_conversation(db: AsyncSession, conversation: ChatConversati
     if not target_model:
         target_model = await get_fallback_model()
         
-    prompt = f"Summarize this message in 5 words or less for a chat title. Output ONLY the title, no quotes or intro: {first_user_message}"
-    messages = [{"role": "user", "content": prompt}]
+    from app.utils.prompt_loader import load_prompt
+    system_instruction = load_prompt("chats/autotitle")
+    messages = [
+        {"role": "system", "content": system_instruction},
+        {"role": "user",   "content": first_user_message},
+    ]
     
     title_chunks = []
     try:

@@ -5,13 +5,24 @@ import { chatService } from '@/services/chat.service';
 import { cn } from '@/lib/utils';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 
+interface ModelInfo {
+  id: string;
+  name: string;
+  type: 'text' | 'vision';
+  size?: string;
+  context_window?: number;
+  description?: string; // 👈 Critical Field
+  is_loaded?: boolean;
+}
+
 export const ModelSelector = () => {
   const { selectedModel, setModel } = useChatStore();
 
-  // Fetch available models from your local AI server
-  const { data: models, isLoading } = useQuery({
+  const { data: models, isLoading } = useQuery<ModelInfo[]>({
     queryKey: ['chat-models'],
-    queryFn: () => chatService.getModels(),
+    queryFn: () => chatService.getModels() as Promise<ModelInfo[]>,
+    staleTime: 0, // 👈 Force refresh immediately
+    refetchOnWindowFocus: true,
   });
 
   const currentModel = models?.find((m) => m.id === selectedModel);
@@ -27,15 +38,17 @@ export const ModelSelector = () => {
       <DropdownMenu.Trigger asChild>
         <button className="flex items-center gap-2 px-3 py-2 bg-white/5 border border-white/10 rounded-lg hover:bg-white/10 transition-all outline-none group">
           <Cpu size={16} className="text-primary-400" />
-          <div className="flex flex-col items-start">
+          <div className="flex flex-col items-start text-left">
             <span className="text-xs font-bold text-white leading-none">
               {currentModel?.name || 'Select Model'}
             </span>
-            {currentModel?.size && (
-              <span className="text-[10px] text-white/40 font-mono">
-                {currentModel.size}
-              </span>
-            )}
+            
+            {/* TRIGGER SUBTITLE */}
+            <span className="text-[10px] text-white/40 font-mono mt-0.5">
+              {currentModel?.description 
+                ? currentModel.description 
+                : (currentModel?.size ? `${currentModel.size} • ${currentModel.context_window}k ctx` : '')}
+            </span>
           </div>
           <ChevronDown size={14} className="text-white/20 group-hover:text-white/60 transition-colors ml-2" />
         </button>
@@ -48,7 +61,7 @@ export const ModelSelector = () => {
           align="start"
         >
           <DropdownMenu.Label className="px-3 py-2 text-[10px] font-bold text-white/30 uppercase tracking-widest">
-            Available Mode
+            Select Mode
           </DropdownMenu.Label>
           
           {models?.map((model) => (
@@ -62,7 +75,18 @@ export const ModelSelector = () => {
             >
               <div className="flex flex-col">
                 <span className="font-medium">{model.name}</span>
-                <span className="text-[10px] opacity-50 font-mono">{model.size} • {model.context_window}k ctx</span>
+                
+                {/* 🟢 THE FIX: Checks for description first */}
+                {model.description ? (
+                   <span className="text-[10px] opacity-50 font-mono text-primary-300">
+                     {model.description}
+                   </span>
+                ) : (
+                   <span className="text-[10px] opacity-50 font-mono">
+                     {model.size} • {model.context_window}k ctx
+                   </span>
+                )}
+                
               </div>
               {selectedModel === model.id && <Check size={14} className="text-primary-400" />}
             </DropdownMenu.Item>

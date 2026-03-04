@@ -30,5 +30,7 @@ export interface ModelInfo {
   file_size_gb: number | null
   type: 'text' | 'vision'
   size?: string; 
+  description?: string;
   context_window?: number;
+  is_loaded?: boolean;
 }

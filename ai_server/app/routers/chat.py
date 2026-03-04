@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from app.services.model_manager import model_manager
 from app.core.config import settings
+from app.utils.prompt_loader import load_prompt_for_model
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -121,7 +122,15 @@ async def chat_completions(request: ChatCompletionRequest):
     if request.stop:
         stop_sequences = [request.stop] if isinstance(request.stop, str) else request.stop
 
-    # ── 6. Streaming Response ────────────────────────────────────────────────
+    # ── 6. Inject per-model system prompt if not already in the request ──────
+    messages = list(request.messages)
+    has_system = any(m.get("role") == "system" for m in messages)
+    if not has_system:
+        system_text = load_prompt_for_model(target_model)
+        if system_text:
+            messages.insert(0, {"role": "system", "content": system_text})
+
+    # ── 7. Streaming Response ────────────────────────────────────────────────
     if request.stream:
         async def event_generator():
             t0 = time.perf_counter()
@@ -141,7 +150,7 @@ async def chat_completions(request: ChatCompletionRequest):
 
             try:
                 async for token in model_manager.generate_stream(
-                    messages=request.messages,
+                    messages=messages,
                     max_tokens=final_max_tokens, # <--- Passing 32768 to llama_cpp
                     temperature=final_temperature,
                     top_p=final_top_p,
@@ -202,7 +211,7 @@ async def chat_completions(request: ChatCompletionRequest):
     else:
         full_content = ""
         async for token in model_manager.generate_stream(
-            messages=request.messages,
+            messages=messages,
             max_tokens=final_max_tokens,
             temperature=final_temperature,
             top_p=final_top_p,
