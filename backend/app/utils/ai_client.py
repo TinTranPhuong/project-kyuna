@@ -4,6 +4,7 @@ import httpx
 
 from app.core.config import settings
 
+
 class AIServerError(Exception):
     def __init__(self, status_code: int, message: str):
         self.status_code = status_code
@@ -13,9 +14,9 @@ class AIServerError(Exception):
 
 class AIServerClient:
     """Singleton async HTTP client for communicating with the AI inference server."""
-    
+
     def __init__(self):
-        self.base_url = settings.AI_SERVER_URL
+        self.base_url = settings.AI_SERVER_URL   # reads from .env → AI_SERVER_URL
         self._client: httpx.AsyncClient | None = None
 
     @property
@@ -28,37 +29,36 @@ class AIServerClient:
         self,
         messages: list[dict],
         model: str,
-        max_tokens: int | None = None,  # None = let AI server use its .env MAX_TOKENS
+        max_tokens: int | None = None,   # None → AI server uses its .env MAX_TOKENS
         temperature: float = 0.7,
     ) -> AsyncGenerator[str, None]:
         """
         POST /v1/chat/completions with stream=True.
-        Parse SSE response and yield each token string.
+        Omits max_tokens from payload when None so the AI server's own
+        .env MAX_TOKENS setting (32768) is used instead of a hardcoded default.
         """
-        payload = {
+        payload: dict = {
             "model": model,
             "messages": messages,
             "stream": True,
-            "temperature": temperature
+            "temperature": temperature,
         }
-        # Only set max_tokens if explicitly passed — otherwise let AI server
-        # use its own .env MAX_TOKENS setting (avoids hardcoded 2048 override)
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
-        
+
         async with self.client.stream("POST", "/v1/chat/completions", json=payload) as response:
             response.raise_for_status()
-            
+
             async for line in response.aiter_lines():
                 if line.startswith("data: "):
                     data = line[6:].strip()
-                    
+
                     if data == "[DONE]":
                         return
-                    
+
                     if not data:
                         continue
-                        
+
                     try:
                         parsed = json.loads(data)
                         choices = parsed.get("choices", [])
@@ -70,34 +70,32 @@ class AIServerClient:
                         continue
 
     async def translate_image_vision_stream(
-        self, 
-        image_base64: str, 
-        source_language: str, 
-        target_language: str
+        self,
+        image_base64: str,
+        source_language: str,
+        target_language: str,
     ) -> AsyncGenerator[str | dict, None]:
-        
+
         payload = {
             "image": image_base64,
             "source_language": source_language,
-            "target_language": target_language
+            "target_language": target_language,
         }
-        
-        # Set timeout to None to completely disable connection dropping
-        timeout_config = httpx.Timeout(None) 
-        ai_url = "http://127.0.0.1:8001/v1/translate/image/stream"
 
-        async with httpx.AsyncClient(timeout=timeout_config) as client:
+        # Use settings.AI_SERVER_URL — never hardcode 127.0.0.1
+        ai_url = f"{settings.AI_SERVER_URL}/v1/translate/image/stream"
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(None)) as client:
             try:
                 async with client.stream("POST", ai_url, json=payload) as response:
                     response.raise_for_status()
-                    
-                    # Use aiter_lines() to prevent SSE chunk fragmentation!
+
                     async for line in response.aiter_lines():
                         if line.startswith("data: "):
                             data_str = line[6:].strip()
                             if data_str:
                                 yield data_str
-                                
+
             except Exception as e:
                 yield {"error": f"AI Client connection error: {str(e)}", "done": True}
 
@@ -133,9 +131,8 @@ class AIServerClient:
     async def ocr_pipeline(self, image_base64: str) -> list[dict]:
         """
         POST /v1/translate/ocr-pipeline
-        Executes Stages 1, 2, and 3 on the AI server in one shot.
+        Executes Stages 1+2+3 on the AI server in one shot.
         Returns: [{"bbox": [x1,y1,x2,y2], "japanese": "text"}, ...]
-        Raises AIServerError on failure.
         """
         try:
             response = await self.client.post(
@@ -150,18 +147,17 @@ class AIServerClient:
         except httpx.HTTPStatusError as e:
             raise AIServerError(e.response.status_code, str(e)) from e
 
-
     async def translate_batch(self, regions: list[dict]) -> list[dict]:
         """
         POST /v1/translate/batch
-        Triggers Hangoff Protocol on AI server side and translates.
-        Returns regions with "english" field populated.
+        Triggers Hangoff Protocol then translates all regions.
+        Returns regions with 'english' field populated.
         """
         try:
             response = await self.client.post(
                 "/v1/translate/batch",
                 json={"regions": regions},
-                timeout=600.0,   # 35B model may need time for first load + inference
+                timeout=600.0,
             )
             response.raise_for_status()
             return response.json()["regions"]
@@ -169,6 +165,7 @@ class AIServerClient:
             raise AIServerError(503, f"AI server unreachable: {e}") from e
         except httpx.HTTPStatusError as e:
             raise AIServerError(e.response.status_code, str(e)) from e
+
 
 # Singleton instance — import this in services
 ai_client = AIServerClient()

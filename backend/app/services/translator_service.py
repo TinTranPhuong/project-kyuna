@@ -474,3 +474,18 @@ async def get_page_file_path(db: AsyncSession, user_id: UUID, job_id: UUID, page
         raise HTTPException(status_code=404, detail="Translated image not generated")
         
     return str(target_path)
+
+
+async def count_translated_pages(db: AsyncSession, user_id: UUID) -> int:
+    """Count total translation pages with status done, for dashboard stats."""
+    from sqlalchemy import func as sa_func
+    stmt = (
+        select(sa_func.count(TranslationPage.id))
+        .join(TranslationJob, TranslationPage.job_id == TranslationJob.id)
+        .where(
+            TranslationJob.user_id == user_id,
+            TranslationPage.processing_status == "completed",
+        )
+    )
+    result = await db.execute(stmt)
+    return result.scalar_one() or 0

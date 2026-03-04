@@ -4,6 +4,7 @@ import { Image as ImageIcon, Settings, User, LogOut, FilePlus, Calculator, Monit
 import NotepadModal from '@/components/notes/NotepadModal';
 import SettingsModal from '@/components/settings/SettingsModal';
 import { useNoteStore } from '@/store/noteStore';
+import { useSettingsStore } from '@/store/settingsStore';
 import { useAuthStore } from '@/store/authStore';
 import NotesManagerModal from '@/components/notes/NotesManagerModal';
 import CalculatorModal from '@/components/calculator/CalculatorModal';
@@ -38,6 +39,7 @@ export default function HomePage() {
   const user = useAuthStore(state => state.user);
   const logout = useAuthStore(state => state.logout);
 
+  const setCustomWallpaper = useSettingsStore(state => state.setCustomWallpaper);
   const [showDropdown, setShowDropdown] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -62,8 +64,7 @@ export default function HomePage() {
     if (file) {
       const reader = new FileReader();
       reader.onloadend = () => {
-        localStorage.setItem('kyuna-bg', reader.result as string);
-        window.dispatchEvent(new Event('bg-updated'));
+        setCustomWallpaper(reader.result as string);
       };
       reader.readAsDataURL(file);
     }

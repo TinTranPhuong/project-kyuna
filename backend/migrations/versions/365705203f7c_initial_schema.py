@@ -1,8 +1,8 @@
-"""${message}
+"""initial_schema
 
-Revision ID: ${up_revision}
-Revises: ${down_revision | comma,n}
-Create Date: ${create_date}
+Revision ID: 365705203f7c
+Revises: 
+Create Date: 2026-03-04 17:32:49.401318
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '898c7109c714'
+revision: str = '365705203f7c'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -28,8 +28,8 @@ def upgrade() -> None:
     sa.Column('is_active', sa.Boolean(), server_default='1', nullable=False),
     sa.Column('is_verified', sa.Boolean(), server_default='0', nullable=False),
     sa.Column('avatar_url', sa.String(length=500), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_users_email'), 'users', ['email'], unique=True)
@@ -42,8 +42,8 @@ def upgrade() -> None:
     sa.Column('system_prompt', sa.Text(), nullable=True),
     sa.Column('message_count', sa.Integer(), server_default='0', nullable=False),
     sa.Column('is_archived', sa.Boolean(), server_default='0', nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
     )
@@ -76,7 +76,7 @@ def upgrade() -> None:
     sa.Column('model_used', sa.String(length=255), nullable=True),
     sa.Column('page_count', sa.Integer(), server_default='0', nullable=False),
     sa.Column('error_message', sa.Text(), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('started_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('completed_at', sa.DateTime(timezone=True), nullable=True),
     sa.CheckConstraint("status IN ('pending', 'processing', 'completed', 'failed')", name='chk_job_status'),
@@ -97,8 +97,8 @@ def upgrade() -> None:
     sa.Column('pomodoro_long_break', sa.Integer(), server_default='15', nullable=False),
     sa.Column('auto_start_breaks', sa.Boolean(), server_default='0', nullable=False),
     sa.Column('notification_sound', sa.Boolean(), server_default='1', nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('user_id')
@@ -111,7 +111,7 @@ def upgrade() -> None:
     sa.Column('tokens_used', sa.Integer(), nullable=True),
     sa.Column('generation_ms', sa.Integer(), nullable=True),
     sa.Column('model_used', sa.String(length=255), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.CheckConstraint("role IN ('user', 'assistant', 'system')", name='chk_message_role'),
     sa.ForeignKeyConstraint(['conversation_id'], ['chat_conversations.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
@@ -132,7 +132,7 @@ def upgrade() -> None:
     sa.Column('phase_status', sa.String(length=20), server_default='pending', nullable=False),
     sa.Column('error_message', sa.Text(), nullable=True),
     sa.Column('processing_ms', sa.Integer(), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.CheckConstraint("processing_status IN ('pending', 'processing', 'done', 'completed', 'no_text', 'failed')", name='chk_page_status'),
     sa.ForeignKeyConstraint(['job_id'], ['translation_jobs.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id'),

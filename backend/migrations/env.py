@@ -1,95 +1,86 @@
+"""
+Alembic async migration environment for Kyuna backend.
+
+Commands:
+  alembic upgrade head                          — apply all pending migrations
+  alembic revision --autogenerate -m "name"     — generate a new migration
+  alembic downgrade -1                          — roll back one step
+  alembic current                               — show current DB version
+"""
+
 import asyncio
-import logging
+import os
 from logging.config import fileConfig
-from sqlalchemy import pool
-from sqlalchemy.ext.asyncio import async_engine_from_config
-from alembic import context
-from dotenv import load_dotenv
-import sys
 from pathlib import Path
 
-# --- ADD THESE TWO LINES ---
-# This forces Python to look in the 'backend' folder for the 'app' module
-sys.path.append(str(Path(__file__).resolve().parent.parent))
+from sqlalchemy import pool
+from sqlalchemy.engine import Connection
+from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
 
-# Now it is safe to import from app
-from app.core.config import settings
-from app.core.database import Base
+# ── Load .env ─────────────────────────────────────────────────────────────────
+# env.py lives at: backend/migrations/env.py
+# .env lives at:   backend/.env
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-# 1. Load environment variables first
-load_dotenv()
+# ── Import ALL models (required for autogenerate to detect tables) ─────────────
+from app.core.database import Base                                    # noqa: E402
+from app.models.user import User                                      # noqa: E402, F401
+from app.models.chat import ChatConversation, ChatMessage             # noqa: E402, F401
+from app.models.session import PomodoroSession, UserSettings          # noqa: E402, F401
+from app.models.translator import TranslationJob, TranslationPage     # noqa: E402, F401
 
-# 2. Import app config and database Base
-from app.core.config import settings
-from app.core.database import Base
-
-# 3. Import ALL models so Alembic can detect metadata for autogenerate
-from app.models import user, session, chat, translator
-
-# this is the Alembic Config object, which provides
-# access to the values within the .ini file in use.
+# ── Alembic config ─────────────────────────────────────────────────────────────
 config = context.config
 
-# Interpret the config file for Python logging.
-# This line sets up loggers basically.
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# 4. Set target metadata
+# Inject DATABASE_URL from .env — overrides the placeholder in alembic.ini
+config.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])
+
 target_metadata = Base.metadata
 
-# Inject the dynamic DATABASE_URL from our settings into Alembic's config
-config.set_main_option("DATABASE_URL", settings.DATABASE_URL)
 
-
+# ── Offline mode (generate SQL without connecting) ────────────────────────────
 def run_migrations_offline() -> None:
-    """Run migrations in 'offline' mode.
-    
-    This configures the context with just a URL
-    and not an Engine, though an Engine is acceptable
-    here as well.  By skipping the Engine creation
-    we don't even need a DBAPI to be available.
-    """
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
         url=url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        compare_type=True,
     )
-
     with context.begin_transaction():
         context.run_migrations()
 
 
-def do_run_migrations(connection) -> None:
-    """Synchronous core for running migrations."""
-    context.configure(connection=connection, target_metadata=target_metadata)
-
+# ── Online mode (connect and apply) ──────────────────────────────────────────
+def do_run_migrations(connection: Connection) -> None:
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        compare_type=True,
+    )
     with context.begin_transaction():
         context.run_migrations()
 
 
 async def run_async_migrations() -> None:
-    """In this scenario we need to create an Engine
-    and associate a connection with the context."""
-
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
-
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
-
     await connectable.dispose()
 
 
 def run_migrations_online() -> None:
-    """Run migrations in 'online' mode."""
     asyncio.run(run_async_migrations())
 
 

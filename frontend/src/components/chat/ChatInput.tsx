@@ -1,12 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send } from 'lucide-react';
+import { Send, Square } from 'lucide-react';
 import { useChatStore } from '@/store/chatStore';
 import { cn } from '@/lib/utils';
 
 export const ChatInput = () => {
   const [content, setContent] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const { sendMessage, isStreaming } = useChatStore();
+  
+  // Assumes stopGeneration exists in your store (see snippet below)
+  const { sendMessage, isStreaming, stopGeneration } = useChatStore();
 
   const CHAR_WARN = 2000;
   const CHAR_LIMIT = 4000;
@@ -26,6 +28,12 @@ export const ChatInput = () => {
     setContent(''); 
     try { await sendMessage(messageToSend); } 
     catch (error) { setContent(messageToSend); }
+  };
+
+  const handleStop = () => {
+    if (stopGeneration) {
+      stopGeneration();
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -50,7 +58,7 @@ export const ChatInput = () => {
           </div>
         )}
 
-        {/* THE FIX: Glassy input background */}
+        {/* Glassy input background */}
         <div className={cn(
           "relative flex items-end gap-2 p-2 rounded-2xl bg-black/40 backdrop-blur-md border border-white/10 transition-all duration-200 shadow-xl",
           "ml-10 md:ml-[52px]",
@@ -63,22 +71,27 @@ export const ChatInput = () => {
             onChange={(e) => setContent(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={isStreaming ? "Kyuna is thinking..." : "Ask Kyuna anything..."}
-            disabled={isStreaming}
+            disabled={isStreaming} // Keep input disabled while thinking to prevent confused state
             className="flex-1 bg-transparent border-none outline-none text-white text-sm py-2 px-3 resize-none custom-scrollbar placeholder:text-white/40 disabled:cursor-not-allowed"
           />
 
           <button
-            onClick={handleSubmit}
-            disabled={!content.trim() || isStreaming || isOverLimit}
+            onClick={isStreaming ? handleStop : handleSubmit}
+            // Enable button if content is ready OR if we are streaming (so we can stop)
+            disabled={(!content.trim() && !isStreaming) || isOverLimit}
             className={cn(
               "mb-1 p-2 rounded-xl transition-all flex items-center justify-center shrink-0",
-              content.trim() && !isStreaming && !isOverLimit
+              (content.trim() || isStreaming) && !isOverLimit
                 ? "bg-primary-600 text-white shadow-lg hover:bg-primary-500 active:scale-95"
                 : "bg-white/5 text-white/30 cursor-not-allowed"
             )}
-            aria-label="Send message"
+            aria-label={isStreaming ? "Stop generation" : "Send message"}
           >
-            <Send size={18} />
+            {isStreaming ? (
+              <Square size={14} className="fill-white animate-pulse" />
+            ) : (
+              <Send size={18} />
+            )}
           </button>
       </div>
     </div>

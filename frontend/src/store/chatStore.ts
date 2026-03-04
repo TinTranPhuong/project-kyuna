@@ -19,8 +19,9 @@ interface ChatState {
   selectConversation: (id: string) => Promise<void>
   createConversation: () => Promise<Conversation | undefined>
   deleteConversation: (id: string) => Promise<void>
-  updateConversationTitle: (id: string, title: string) => Promise<void> // NEW: Added to interface
+  updateConversationTitle: (id: string, title: string) => Promise<void>
   sendMessage: (content: string) => Promise<void>
+  stopGeneration: () => void // <-- NEW: Added to interface
   setModel: (model: string) => void
   appendStreamToken: (token: string) => void
   finalizeStream: (fullContent: string) => void
@@ -91,7 +92,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  // NEW: Store implementation
   updateConversationTitle: async (id, title) => {
     // Optimistic UI update
     set(state => ({
@@ -104,14 +104,27 @@ export const useChatStore = create<ChatState>((set, get) => ({
       await chatService.updateConversationTitle(id, title)
     } catch (error) {
       console.error('Failed to update conversation title:', error)
-      // If needed, you can reload conversations here to revert the UI on failure
     }
+  },
+
+  // NEW: Action to manually stop generation from the UI
+  stopGeneration: () => {
+    // FIX: Removed unused 'isStreaming' from destructuring
+    const { _abortController } = get() 
+    
+    if (_abortController) {
+      _abortController.abort() // Cancel the HTTP request
+      console.log('Generation stopped by user')
+    }
+    // Reset loading state immediately so UI shows "Stopped"
+    set({ isStreaming: false, _abortController: null })
   },
 
   sendMessage: async (content) => {
     const { activeConversationId, selectedModel, isStreaming, _abortController } = get()
     if (!activeConversationId) return
 
+    // Auto-abort if previous stream is still active
     if (isStreaming && _abortController) {
       _abortController.abort()
     }
@@ -143,16 +156,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
       },
     }))
 
+    // Define fullContent outside try/catch so we can save partial text on abort
+    let fullContent = ''
+
     try {
       const stream = chatService.sendMessageStream(
         activeConversationId,
         content,
         selectedModel,
-        controller.signal,
-        
+        controller.signal
       )
 
-      let fullContent = ''
       let textBuffer = ''
       let lastUpdateTime = Date.now()
       const THROTTLE_MS = 50
@@ -173,8 +187,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
 
       get().finalizeStream(fullContent)
+
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') return
+      // If user clicked Stop, we catch the AbortError here
+      if (error instanceof Error && error.name === 'AbortError') {
+        // Optional: If you want to SAVE what was generated before stopping, 
+        // uncomment the line below:
+        // if (fullContent) get().finalizeStream(fullContent)
+        return
+      }
+      
       console.error('Streaming error:', error)
       set({ isStreaming: false, currentStreamContent: '' })
     }

@@ -45,6 +45,10 @@ ai_server/app/core/config.py
 ai_server/app/main.py
 ai_server/app/models/.gitkeep
 ai_server/app/models/comictextdetector.pt
+ai_server/app/prompts/chats/autotitle.md
+ai_server/app/prompts/chats/fast.md
+ai_server/app/prompts/chats/thinking.md
+ai_server/app/prompts/translation.md
 ai_server/app/routers/chat.py
 ai_server/app/routers/detect_health.py
 ai_server/app/routers/models.py
@@ -55,6 +59,7 @@ ai_server/app/services/ocr_pipeline_service.py
 ai_server/app/services/translation_pipeline_service.py
 ai_server/app/services/translation_service.py
 ai_server/app/services/vision_translation_service.py
+ai_server/app/utils/prompt_loader.py
 backend/app/core/config.py
 backend/app/core/database.py
 backend/app/core/limiter.py
@@ -85,6 +90,7 @@ backend/app/services/translator_service.py
 backend/app/services/user_service.py
 backend/app/utils/ai_client.py
 backend/app/utils/image_utils.py
+backend/app/utils/prompt_loader.py
 backend/app/utils/zip_utils.py
 frontend/src/App.tsx
 frontend/src/components/calculator/CalculatorModal.tsx
@@ -189,6 +195,146 @@ This section contains the contents of the repository's files.
 
 <file path="ai_server/app/models/.gitkeep">
 
+</file>
+
+<file path="ai_server/app/prompts/chats/autotitle.md">
+You are a conversation title generator.
+Read the user's message and generate a short, concise title (3-6 words maximum).
+Do not use quotes. Do not include "Title:" or any other labels. Just the title text.
+If the message is too short or nonsensical to title, return "New Conversation".
+</file>
+
+<file path="ai_server/app/prompts/chats/fast.md">
+# ─── IDENTITY ────────────────────────────────────────────────────────────────
+You are Kyuna, an AI assistant optimized for fast, accurate, and practical
+responses. You have full vision capabilities — you can read, analyze, and
+reason about images, documents, charts, and screenshots in addition to text.
+
+# ─── RESPONSE PRINCIPLES ─────────────────────────────────────────────────────
+Deliver responses that are:
+
+  DIRECT        Lead with the answer or action. Do not bury the key point
+                under preamble. The first sentence should always be useful.
+
+  CONCISE       Say exactly what is needed — no more, no less.
+                Remove filler phrases, redundant qualifiers, and padding.
+
+  ACCURATE      Only state what you are confident about.
+                If uncertain, say so briefly and clearly.
+
+  ACTIONABLE    Where applicable, give concrete steps or examples,
+                not just abstract explanations.
+
+# ─── VISION GUIDELINES ───────────────────────────────────────────────────────
+When an image is provided:
+  - Describe exactly what you observe — be specific about text, layout,
+    colors, objects, and spatial relationships.
+  - If the image contains data (charts, tables, code, UI), extract and
+    interpret it precisely.
+  - Point out anything that seems anomalous, incorrect, or noteworthy.
+  - Do not guess or hallucinate content that is not clearly visible.
+
+# ─── FORMAT RULES ────────────────────────────────────────────────────────────
+  - For simple questions: answer in 1–3 sentences.
+  - For multi-part questions: use a numbered list or short sections.
+  - For code requests: provide clean, working code with brief comments.
+  - For comparisons: use a table or side-by-side structure.
+  - Match response length to task complexity — never pad to appear thorough.
+
+# ─── BEHAVIORAL GUIDELINES ───────────────────────────────────────────────────
+  - Never open with sycophantic phrases ("Great question!", "Sure!", "Of course!").
+  - Do not repeat the user's question back to them before answering.
+  - If a request is ambiguous, make a reasonable assumption, state it,
+    and proceed rather than asking multiple clarifying questions.
+  - Maintain a helpful, professional tone without being overly formal.
+
+# ─── SCOPE LIMITS ────────────────────────────────────────────────────────────
+For legal, medical, or financial matters: provide useful context clearly
+labeled as informational only, and recommend professional consultation.
+</file>
+
+<file path="ai_server/app/prompts/chats/thinking.md">
+# ─── IDENTITY ────────────────────────────────────────────────────────────────
+You are Kyuna, an enterprise-grade AI assistant built for deep reasoning,
+complex analysis, and high-stakes decision support.
+You are powered by a 35B Mixture-of-Experts architecture with native
+reinforcement-learning-trained reasoning and full vision-language capabilities.
+
+# ─── REASONING PROTOCOL (MANDATORY) ─────────────────────────────────────────
+You MUST always think before every response using your <think> block.
+This is non-negotiable — it is your primary quality control mechanism.
+
+Inside <think>, always execute these steps:
+  1. Restate the user's request in your own words to confirm understanding.
+  2. Identify ambiguities, missing information, or hidden assumptions.
+  3. Decompose the problem into logical sub-tasks or steps.
+  4. Consider multiple approaches — evaluate trade-offs between them.
+  5. Self-check your planned answer for accuracy, completeness, and correctness.
+  6. Decide on the best format (prose, code, table, steps) for the output.
+
+Scale thinking depth to task complexity:
+  - Simple or conversational  → concise think (identify intent, verify facts)
+  - Technical or analytical   → thorough think (full decomposition, edge cases)
+  - High-stakes or ambiguous  → exhaustive think (consider all failure modes)
+
+Never skip or shorten the think block to appear faster.
+A well-reasoned slower answer is always superior to a fast wrong one.
+
+# ─── RESPONSE STANDARDS ──────────────────────────────────────────────────────
+After completing your think block, deliver the final response with:
+
+  PRECISION      Be specific and accurate. Quantify uncertainty explicitly
+                 when you are not fully confident. Never guess silently.
+
+  STRUCTURE      Use headers, numbered steps, tables, or code blocks when
+                 they improve clarity. Match the format to the task type.
+
+  COMPLETENESS   Address the full scope of the request. Do not truncate,
+                 omit important context, or leave sub-questions unanswered.
+
+  CONCISENESS    Every sentence must add value. Remove filler phrases,
+                 redundant disclaimers, and unnecessary repetition.
+
+  HONESTY        If you do not know, state it clearly and explain why.
+                 Never fabricate facts, citations, or code you are not
+                 confident about.
+
+# ─── CORE CAPABILITIES ───────────────────────────────────────────────────────
+  - Multi-step logical reasoning and formal deduction
+  - Advanced mathematics, proofs, and quantitative modeling
+  - Software engineering: architecture, debugging, code review, refactoring
+  - Scientific research synthesis and long-document analysis
+  - Strategic planning, risk assessment, and business decision support
+  - Chart, diagram, and visual data interpretation
+  - Multilingual communication across 201 languages
+
+# ─── BEHAVIORAL GUIDELINES ───────────────────────────────────────────────────
+  - Maintain a professional, direct, and respectful tone at all times.
+  - Use active voice and concrete examples over abstract generalities.
+  - When comparing options, give a clear recommendation with stated rationale.
+  - When writing code, add inline comments for all non-obvious logic.
+  - In multi-turn conversations, maintain full context awareness across turns.
+  - Never open with sycophantic phrases ("Great question!", "Of course!", "Sure!").
+  - Address the user's actual intent, not only their literal words.
+  - If a request is underspecified, state your assumptions before proceeding.
+
+# ─── PROFESSIONAL BOUNDARIES ─────────────────────────────────────────────────
+For legal, medical, or financial matters: deliver your best analytical
+reasoning, then clearly recommend consulting a qualified professional.
+Label such outputs as informational, not authoritative guidance.
+</file>
+
+<file path="ai_server/app/prompts/translation.md">
+You are a professional manga translator. Your task is to fill the empty 'english' field in the provided JSON.
+    "Rules:\n"
+    "1. Translate the text in the 'japanese' field to English.\n"
+    "2. Put the translation ONLY in the 'english' field.\n"
+    "3. If the text is already English, copy it to the 'english' field.\n"
+    "4. Return ONLY the JSON array.\n\n"
+"Example Interaction:\n"
+    "User: [{\"index\": 0, \"japanese\": \"こんにちは\", \"english\": \"\"}]\n"
+    "Assistant: [{\"index\": 0, \"japanese\": \"こんにちは\", \"english\": \"Hello there.\"}]\n\n"
+    "Now process this real data:
 </file>
 
 <file path="ai_server/app/routers/detect_health.py">
@@ -535,6 +681,10 @@ async def translate_image_vision(image_path: str, source_language: str, target_l
     yield {"status": "info", "message": "Using legacy vision endpoint. Please use V2 pipeline."}
     await asyncio.sleep(0.5)
     yield {"status": "done", "regions": []}
+</file>
+
+<file path="ai_server/app/utils/prompt_loader.py">
+
 </file>
 
 <file path="backend/app/core/config.py">
@@ -1917,6 +2067,115 @@ def resize_image_for_ocr(image_path: str, max_dim: int = 2000) -> str:
         resized_img.convert("RGB").save(temp_path, "JPEG", quality=90)
         
         return temp_path
+</file>
+
+<file path="backend/app/utils/prompt_loader.py">
+"""
+prompt_loader.py — ai_server/app/utils/prompt_loader.py
+
+Loads system prompts from Markdown files under ai_server/app/prompts/.
+
+Folder layout:
+    prompts/
+      chats/
+        fast.md         ← Fast model (Qwen 3 8B)
+        thinking.md     ← Thinking model (Qwen 3.5 35B)
+        autotitle.md    ← Auto-title a conversation in 5 words
+      translation.md    ← Manga bubble translation rules
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ HOW TO ADD A NEW MODEL PROMPT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  1. Create  prompts/chats/mymodel.md
+  2. Add an entry to MODEL_PROMPT_MAP below:
+       "MyModel-7B-Q4.gguf": "chats/mymodel"
+  3. Restart the server. Done.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+
+from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Prompts root is always relative to this file:
+# ai_server/app/utils/prompt_loader.py → ai_server/app/prompts/
+_PROMPTS_DIR = Path(__file__).resolve().parents[3] / "ai_server" / "app" / "prompts"
+
+# ── Model → Prompt mapping ──────────────────────────────────────────────────
+# Key   : exact GGUF filename (must match .env / models.py preset)
+# Value : path relative to prompts/ WITHOUT the .md extension
+MODEL_PROMPT_MAP: dict[str, str] = {
+    "Qwen3VL-8B-Instruct-Q8_0.gguf":  "chats/fast",
+    "Qwen3.5-35B-A3B-UD-IQ3_S.gguf":  "chats/thinking",
+    "Sugoi-14B-Ultra-Q4_K_M.gguf":    "translation",
+}
+
+
+# ── Sampling note for Qwen3.5-35B-A3B (thinking model) ────────────────────────
+# Per official model card, thinking mode is ON by default.
+# Recommended params: temperature=1.0, top_p=0.95, top_k=20, presence_penalty=1.5
+# These should be set in your .env or overridden per-request in chat.py.
+# DO NOT pass chat_template_kwargs: {enable_thinking: False} — that disables it.
+# ───────────────────────────────────────────────────────────────────────────────
+# In-memory cache: { "chats/fast": "You are a fast assistant..." }
+_cache: dict[str, str] = {}
+
+
+def load_prompt(key: str, *, reload: bool = False) -> str:
+    """
+    Load a prompt by key (subdirectory/name without .md).
+
+    Examples:
+        load_prompt("chats/fast")       → prompts/chats/fast.md
+        load_prompt("chats/thinking")   → prompts/chats/thinking.md
+        load_prompt("chats/autotitle")  → prompts/chats/autotitle.md
+        load_prompt("translation")      → prompts/translation.md
+
+    Raises FileNotFoundError if the .md file does not exist.
+    """
+    if key in _cache and not reload:
+        return _cache[key]
+
+    prompt_path = _PROMPTS_DIR / f"{key}.md"
+    if not prompt_path.exists():
+        raise FileNotFoundError(
+            f"[PromptLoader] Missing: {prompt_path}\n"
+            f"Create ai_server/app/prompts/{key}.md to define this prompt."
+        )
+
+    text = prompt_path.read_text(encoding="utf-8").strip()
+    _cache[key] = text
+    logger.debug(f"[PromptLoader] '{key}' loaded ({len(text)} chars)")
+    return text
+
+
+def load_prompt_for_model(model_filename: str) -> str | None:
+    """
+    Look up which prompt belongs to a model filename and load it.
+
+    Returns None (no system prompt) if the model has no entry in
+    MODEL_PROMPT_MAP or if the .md file is missing — never crashes.
+
+    Example:
+        load_prompt_for_model("Qwen3.5-35B-A3B-UD-IQ3_S.gguf")
+        → loads prompts/chats/thinking.md
+    """
+    key = MODEL_PROMPT_MAP.get(model_filename)
+    if not key:
+        logger.warning(f"[PromptLoader] No prompt mapped for '{model_filename}' — running without system prompt.")
+        return None
+    try:
+        return load_prompt(key)
+    except FileNotFoundError as e:
+        logger.warning(str(e))
+        return None
+
+
+def reload_all() -> None:
+    """Clear the cache — all prompts are re-read from disk on next use."""
+    _cache.clear()
+    logger.info("[PromptLoader] Cache cleared.")
 </file>
 
 <file path="backend/app/utils/zip_utils.py">
@@ -7468,406 +7727,6 @@ class JobDetailResponse(JobResponse):
     model_config = ConfigDict(from_attributes=True)
 </file>
 
-<file path="backend/app/services/chat_service.py">
-import json
-import time
-from typing import AsyncGenerator
-
-from fastapi import HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
-from sqlalchemy.orm import selectinload
-
-from app.models.chat import ChatConversation, ChatMessage
-from app.schemas.chat import CreateConversationRequest, ChatMessageRequest
-from app.utils.ai_client import ai_client
-
-
-async def get_available_models() -> list[dict]:
-    """Fetches available models from the local AI inference server."""
-    try:
-        return await ai_client.list_models()
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, 
-            detail=f"AI Server is unreachable: {str(e)}"
-        )
-
-async def get_fallback_model() -> str:
-    """Dynamically grabs the first available loaded model from your AI Server."""
-    models = await get_available_models()
-    if models and len(models) > 0:
-        return models[0].get("id", "")
-    return ""
-
-
-async def create_conversation(db: AsyncSession, user_id: str, data: CreateConversationRequest) -> ChatConversation:
-    """Creates a new chat conversation."""
-    conversation = ChatConversation(
-        user_id=user_id,
-        title=data.title or "New Conversation",
-        system_prompt=data.system_prompt
-    )
-    db.add(conversation)
-    await db.commit()
-    await db.refresh(conversation)
-    return conversation
-
-
-async def get_conversations(db: AsyncSession, user_id: str, skip: int, limit: int) -> list[ChatConversation]:
-    """Lists non-archived conversations ordered by most recently updated."""
-    stmt = select(ChatConversation).where(
-        ChatConversation.user_id == user_id,
-        ChatConversation.is_archived == False
-    ).order_by(desc(ChatConversation.updated_at)).offset(skip).limit(limit)
-    
-    result = await db.execute(stmt)
-    return list(result.scalars().all())
-
-
-async def get_conversation_detail(db: AsyncSession, user_id: str, conversation_id: str) -> dict:
-    """Fetches a conversation and its messages, verifying ownership."""
-    stmt = select(ChatConversation).where(
-        ChatConversation.id == conversation_id,
-        ChatConversation.user_id == user_id
-    ).options(selectinload(ChatConversation.messages)) 
-    
-    result = await db.execute(stmt)
-    conversation = result.scalar_one_or_none()
-    
-    if not conversation:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
-        
-    return conversation
-
-
-async def update_conversation(db: AsyncSession, user_id: str, conversation_id: str, data: CreateConversationRequest, is_archived: bool = None) -> ChatConversation:
-    """Updates title, prompt, or archive status."""
-    stmt = select(ChatConversation).where(ChatConversation.id == conversation_id, ChatConversation.user_id == user_id)
-    conversation = (await db.execute(stmt)).scalar_one_or_none()
-    
-    if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-        
-    if data.title is not None:
-        conversation.title = data.title
-    if data.system_prompt is not None:
-        conversation.system_prompt = data.system_prompt
-    if is_archived is not None:
-        conversation.is_archived = is_archived
-        
-    await db.commit()
-    await db.refresh(conversation)
-    return conversation
-
-
-async def delete_conversation(db: AsyncSession, user_id: str, conversation_id: str, hard_delete: bool) -> None:
-    """Soft or hard deletes a conversation."""
-    stmt = select(ChatConversation).where(ChatConversation.id == conversation_id, ChatConversation.user_id == user_id)
-    conversation = (await db.execute(stmt)).scalar_one_or_none()
-    
-    if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-        
-    if hard_delete:
-        await db.delete(conversation)
-    else:
-        conversation.is_archived = True
-        
-    await db.commit()
-
-
-async def save_message(db: AsyncSession, conversation_id: str, role: str, content: str, tokens_used: int = None, generation_ms: int = None, model: str = None) -> ChatMessage:
-    """Saves a single message and updates the conversation's message count and updated_at timestamp."""
-    message = ChatMessage(
-        conversation_id=conversation_id,
-        role=role,
-        content=content,
-        tokens_used=tokens_used,
-        generation_ms=generation_ms,
-        model_used=model
-    )
-    db.add(message)
-    
-    # Update conversation metadata
-    stmt = select(ChatConversation).where(ChatConversation.id == conversation_id)
-    conversation = (await db.execute(stmt)).scalar_one()
-    conversation.message_count += 1
-    
-    await db.commit()
-    return message
-
-
-async def verify_and_save_user_message(db: AsyncSession, user_id: str, conversation_id: str, data: ChatMessageRequest) -> None:
-    """Validates the conversation and saves the incoming user message."""
-    stmt = select(ChatConversation).where(ChatConversation.id == conversation_id, ChatConversation.user_id == user_id)
-    conversation = (await db.execute(stmt)).scalar_one_or_none()
-    
-    if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-        
-    await save_message(db, conversation_id, role="user", content=data.content)
-    
-    # Auto-title on the very first user message
-    if conversation.message_count == 1 and conversation.title == "New Conversation":
-        await auto_title_conversation(db, conversation, data.content, data.model_used)
-
-
-async def auto_title_conversation(db: AsyncSession, conversation: ChatConversation, first_user_message: str, model: str) -> None:
-    """Asks the AI for a short title and updates the conversation."""
-    target_model = model or conversation.model_used
-    if not target_model:
-        target_model = await get_fallback_model()
-        
-    prompt = f"Summarize this message in 5 words or less for a chat title. Output ONLY the title, no quotes or intro: {first_user_message}"
-    messages = [{"role": "user", "content": prompt}]
-    
-    title_chunks = []
-    try:
-        async for chunk in ai_client.chat_stream(messages, target_model, max_tokens=10):
-            title_chunks.append(chunk)
-            
-        generated_title = "".join(title_chunks).strip().strip('"').strip("'")
-        
-        if generated_title:
-            conversation.title = generated_title
-            await db.commit()
-    except Exception as e:
-        print(f"Failed to auto-title conversation: {e}")
-
-
-async def stream_chat_response(db: AsyncSession, user_id: str, conversation_id: str, requested_model: str) -> AsyncGenerator[str, None]:
-    """
-    Streams the AI response back to the client via Server-Sent Events (SSE).
-    Once finished, saves the complete AI response to the database.
-    """
-    # 1. Fetch full conversation history WITH messages eager loaded
-    stmt = select(ChatConversation).where(
-        ChatConversation.id == conversation_id, 
-        ChatConversation.user_id == user_id
-    ).options(selectinload(ChatConversation.messages)) 
-    
-    conversation = (await db.execute(stmt)).scalar_one()
-    
-    # Dynamically select the model
-    target_model = requested_model or conversation.model_used
-    if not target_model:
-        target_model = await get_fallback_model()
-    
-    # Build payload for AI Server
-    messages_payload = []
-    if conversation.system_prompt:
-        messages_payload.append({"role": "system", "content": conversation.system_prompt})
-        
-    for msg in conversation.messages:
-        messages_payload.append({"role": msg.role, "content": msg.content})
-
-    # 2. Stream from AI Server
-    accumulated_content = []
-    start_time = time.time()
-    
-    try:
-        async for token in ai_client.chat_stream(messages_payload, target_model):
-            accumulated_content.append(token)
-            # Yield SSE formatted string
-            yield f"data: {json.dumps({'token': token})}\n\n"
-            
-    except Exception as e:
-        yield f"data: {json.dumps({'error': str(e)})}\n\n"
-        
-    finally:
-        # Yield the required done signal
-        yield "data: [DONE]\n\n"
-        
-        # 3. Save assistant message to DB after stream finishes
-        full_response = "".join(accumulated_content)
-        if full_response:
-            generation_ms = int((time.time() - start_time) * 1000)
-            
-            await save_message(
-                db=db,
-                conversation_id=conversation_id,
-                role="assistant",
-                content=full_response,
-                generation_ms=generation_ms,
-                model=target_model
-            )
-</file>
-
-<file path="backend/app/utils/ai_client.py">
-import json
-from typing import AsyncGenerator
-import httpx
-
-from app.core.config import settings
-
-class AIServerError(Exception):
-    def __init__(self, status_code: int, message: str):
-        self.status_code = status_code
-        self.message = message
-        super().__init__(message)
-
-
-class AIServerClient:
-    """Singleton async HTTP client for communicating with the AI inference server."""
-    
-    def __init__(self):
-        self.base_url = settings.AI_SERVER_URL
-        self._client: httpx.AsyncClient | None = None
-
-    @property
-    def client(self) -> httpx.AsyncClient:
-        if not self._client:
-            self._client = httpx.AsyncClient(base_url=self.base_url, timeout=300.0)
-        return self._client
-
-    async def chat_stream(
-        self,
-        messages: list[dict],
-        model: str,
-        max_tokens: int = 2048,
-        temperature: float = 0.7,
-    ) -> AsyncGenerator[str, None]:
-        """
-        POST /v1/chat/completions with stream=True.
-        Parse SSE response and yield each token string.
-        """
-        payload = {
-            "model": model,
-            "messages": messages,
-            "stream": True,
-            "max_tokens": max_tokens,
-            "temperature": temperature
-        }
-        
-        async with self.client.stream("POST", "/v1/chat/completions", json=payload) as response:
-            response.raise_for_status()
-            
-            async for line in response.aiter_lines():
-                if line.startswith("data: "):
-                    data = line[6:].strip()
-                    
-                    if data == "[DONE]":
-                        return
-                    
-                    if not data:
-                        continue
-                        
-                    try:
-                        parsed = json.loads(data)
-                        choices = parsed.get("choices", [])
-                        if choices:
-                            token = choices[0].get("delta", {}).get("content", "")
-                            if token:
-                                yield token
-                    except json.JSONDecodeError:
-                        continue
-
-    async def translate_image_vision_stream(
-        self, 
-        image_base64: str, 
-        source_language: str, 
-        target_language: str
-    ) -> AsyncGenerator[str | dict, None]:
-        
-        payload = {
-            "image": image_base64,
-            "source_language": source_language,
-            "target_language": target_language
-        }
-        
-        # Set timeout to None to completely disable connection dropping
-        timeout_config = httpx.Timeout(None) 
-        ai_url = "http://127.0.0.1:8001/v1/translate/image/stream"
-
-        async with httpx.AsyncClient(timeout=timeout_config) as client:
-            try:
-                async with client.stream("POST", ai_url, json=payload) as response:
-                    response.raise_for_status()
-                    
-                    # Use aiter_lines() to prevent SSE chunk fragmentation!
-                    async for line in response.aiter_lines():
-                        if line.startswith("data: "):
-                            data_str = line[6:].strip()
-                            if data_str:
-                                yield data_str
-                                
-            except Exception as e:
-                yield {"error": f"AI Client connection error: {str(e)}", "done": True}
-
-    async def translate_image(
-        self,
-        image_base64: str,
-        source_language: str,
-        target_language: str,
-    ) -> dict:
-        """POST /v1/translate/image. Returns {translated_text, bounding_boxes, original_text}."""
-        response = await self.client.post("/v1/translate/image", json={
-            "image": image_base64,
-            "source_language": source_language,
-            "target_language": target_language,
-        })
-        response.raise_for_status()
-        return response.json()
-
-    async def list_models(self) -> list[dict]:
-        """GET /v1/models. Returns list of available model info."""
-        response = await self.client.get("/v1/models")
-        response.raise_for_status()
-        return response.json().get("data", [])
-
-    async def health_check(self) -> bool:
-        """Returns True if AI server is healthy and model is loaded."""
-        try:
-            response = await self.client.get("/v1/health", timeout=5.0)
-            return response.json().get("model_loaded", False)
-        except Exception:
-            return False
-
-    async def ocr_pipeline(self, image_base64: str) -> list[dict]:
-        """
-        POST /v1/translate/ocr-pipeline
-        Executes Stages 1, 2, and 3 on the AI server in one shot.
-        Returns: [{"bbox": [x1,y1,x2,y2], "japanese": "text"}, ...]
-        Raises AIServerError on failure.
-        """
-        try:
-            response = await self.client.post(
-                "/v1/translate/ocr-pipeline",
-                json={"image": image_base64},
-                timeout=120.0,
-            )
-            response.raise_for_status()
-            return response.json()["regions"]
-        except httpx.ConnectError as e:
-            raise AIServerError(503, f"AI server unreachable: {e}") from e
-        except httpx.HTTPStatusError as e:
-            raise AIServerError(e.response.status_code, str(e)) from e
-
-
-    async def translate_batch(self, regions: list[dict]) -> list[dict]:
-        """
-        POST /v1/translate/batch
-        Triggers Hangoff Protocol on AI server side and translates.
-        Returns regions with "english" field populated.
-        """
-        try:
-            response = await self.client.post(
-                "/v1/translate/batch",
-                json={"regions": regions},
-                timeout=600.0,   # 35B model may need time for first load + inference
-            )
-            response.raise_for_status()
-            return response.json()["regions"]
-        except httpx.ConnectError as e:
-            raise AIServerError(503, f"AI server unreachable: {e}") from e
-        except httpx.HTTPStatusError as e:
-            raise AIServerError(e.response.status_code, str(e)) from e
-
-# Singleton instance — import this in services
-ai_client = AIServerClient()
-</file>
-
 <file path="frontend/src/components/chat/ChatMessage.tsx">
 import { useState, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -8115,83 +7974,6 @@ export const ConversationList = () => {
 };
 
 export default ConversationList;
-</file>
-
-<file path="frontend/src/components/chat/ModelSelector.tsx">
-import { useQuery } from '@tanstack/react-query';
-import { ChevronDown, Cpu, Check } from 'lucide-react';
-import { useChatStore } from '@/store/chatStore';
-import { chatService } from '@/services/chat.service';
-import { cn } from '@/lib/utils';
-import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
-
-export const ModelSelector = () => {
-  const { selectedModel, setModel } = useChatStore();
-
-  // Fetch available models from your local AI server
-  const { data: models, isLoading } = useQuery({
-    queryKey: ['chat-models'],
-    queryFn: () => chatService.getModels(),
-  });
-
-  const currentModel = models?.find((m) => m.id === selectedModel);
-
-  if (isLoading) {
-    return (
-      <div className="h-10 w-48 bg-white/5 animate-pulse rounded-lg border border-white/5" />
-    );
-  }
-
-  return (
-    <DropdownMenu.Root>
-      <DropdownMenu.Trigger asChild>
-        <button className="flex items-center gap-2 px-3 py-2 bg-white/5 border border-white/10 rounded-lg hover:bg-white/10 transition-all outline-none group">
-          <Cpu size={16} className="text-primary-400" />
-          <div className="flex flex-col items-start">
-            <span className="text-xs font-bold text-white leading-none">
-              {currentModel?.name || 'Select Model'}
-            </span>
-            {currentModel?.size && (
-              <span className="text-[10px] text-white/40 font-mono">
-                {currentModel.size}
-              </span>
-            )}
-          </div>
-          <ChevronDown size={14} className="text-white/20 group-hover:text-white/60 transition-colors ml-2" />
-        </button>
-      </DropdownMenu.Trigger>
-
-      <DropdownMenu.Portal>
-        <DropdownMenu.Content
-          className="z-50 min-w-[220px] bg-surface-900 border border-white/10 rounded-xl p-1 shadow-2xl animate-in fade-in zoom-in-95 duration-100"
-          sideOffset={8}
-          align="start"
-        >
-          <DropdownMenu.Label className="px-3 py-2 text-[10px] font-bold text-white/30 uppercase tracking-widest">
-            Available Mode
-          </DropdownMenu.Label>
-          
-          {models?.map((model) => (
-            <DropdownMenu.Item
-              key={model.id}
-              onClick={() => setModel(model.id)}
-              className={cn(
-                "flex items-center justify-between px-3 py-2.5 rounded-lg text-sm cursor-pointer outline-none transition-colors",
-                selectedModel === model.id ? "bg-primary-600/20 text-white" : "text-white/60 hover:bg-white/5 hover:text-white"
-              )}
-            >
-              <div className="flex flex-col">
-                <span className="font-medium">{model.name}</span>
-                <span className="text-[10px] opacity-50 font-mono">{model.size} • {model.context_window}k ctx</span>
-              </div>
-              {selectedModel === model.id && <Check size={14} className="text-primary-400" />}
-            </DropdownMenu.Item>
-          ))}
-        </DropdownMenu.Content>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
-  );
-};
 </file>
 
 <file path="frontend/src/components/chat/ToolsPanel.tsx">
@@ -10630,43 +10412,6 @@ export const useTimerStore = create<TimerState>()(
 )
 </file>
 
-<file path="frontend/src/types/chat.types.ts">
-export interface Conversation {
-  id: string
-  title: string
-  model_used: string | null
-  message_count: number
-  is_archived: boolean
-  created_at: string
-  updated_at: string
-}
-
-export interface Message {
-  id: string
-  conversation_id: string
-  role: 'user' | 'assistant' | 'system'
-  content: string
-  timestamp: string;
-  tokens_used: number | null
-  generation_ms: number | null
-  model_used: string | null
-  created_at: string
-}
-
-export interface ConversationWithMessages extends Conversation {
-  messages: Message[]
-}
-
-export interface ModelInfo {
-  id: string
-  name: string
-  file_size_gb: number | null
-  type: 'text' | 'vision'
-  size?: string; 
-  context_window?: number;
-}
-</file>
-
 <file path="backend/app/routers/translator.py">
 import asyncio
 import aiofiles
@@ -11065,67 +10810,234 @@ async def download_translated_job(
     )
 </file>
 
-<file path="backend/app/schemas/chat.py">
-from datetime import datetime
-from typing import List, Optional
-from uuid import UUID
+<file path="backend/app/services/chat_service.py">
+import json
+import time
+from typing import AsyncGenerator
 
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi import HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, desc
+from sqlalchemy.orm import selectinload
 
-class ChatMessageRequest(BaseModel):
-    content: str  
-    model_used: Optional[str] = None  
+from app.models.chat import ChatConversation, ChatMessage
+from app.schemas.chat import CreateConversationRequest, ChatMessageRequest
+from app.utils.ai_client import ai_client
+
+
+async def get_available_models() -> list[dict]:
+    """Fetches available models from the local AI inference server."""
+    try:
+        return await ai_client.list_models()
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, 
+            detail=f"AI Server is unreachable: {str(e)}"
+        )
+
+async def get_fallback_model() -> str:
+    """Dynamically grabs the first available loaded model from your AI Server."""
+    models = await get_available_models()
+    if models and len(models) > 0:
+        return models[0].get("id", "")
+    return ""
+
+
+async def create_conversation(db: AsyncSession, user_id: str, data: CreateConversationRequest) -> ChatConversation:
+    """Creates a new chat conversation."""
+    conversation = ChatConversation(
+        user_id=user_id,
+        title=data.title or "New Conversation",
+        system_prompt=data.system_prompt
+    )
+    db.add(conversation)
+    await db.commit()
+    await db.refresh(conversation)
+    return conversation
+
+
+async def get_conversations(db: AsyncSession, user_id: str, skip: int, limit: int) -> list[ChatConversation]:
+    """Lists non-archived conversations ordered by most recently updated."""
+    stmt = select(ChatConversation).where(
+        ChatConversation.user_id == user_id,
+        ChatConversation.is_archived == False
+    ).order_by(desc(ChatConversation.updated_at)).offset(skip).limit(limit)
     
-class CreateConversationRequest(BaseModel):
-    title: Optional[str] = None
-    system_prompt: Optional[str] = None
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
 
 
-class ConversationResponse(BaseModel):
-    id: UUID
-    title: str
-    model_used: Optional[str] = None
-    message_count: int
-    is_archived: bool
-    created_at: datetime
-    updated_at: datetime
+async def get_conversation_detail(db: AsyncSession, user_id: str, conversation_id: str) -> dict:
+    """Fetches a conversation and its messages, verifying ownership."""
+    stmt = select(ChatConversation).where(
+        ChatConversation.id == conversation_id,
+        ChatConversation.user_id == user_id
+    ).options(selectinload(ChatConversation.messages)) 
     
-    model_config = ConfigDict(from_attributes=True)
-
-
-class MessageResponse(BaseModel):
-    id: UUID
-    conversation_id: UUID
-    role: str = Field(pattern="^(user|assistant|system)$")
-    content: str
-    tokens_used: Optional[int] = None
-    generation_ms: Optional[int] = None
-    model_used: Optional[str] = None
-    created_at: datetime
+    result = await db.execute(stmt)
+    conversation = result.scalar_one_or_none()
     
-    model_config = ConfigDict(from_attributes=True)
+    if not conversation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+        
+    return conversation
 
 
-class ConversationDetailResponse(ConversationResponse):
-    messages: List[MessageResponse]
+async def update_conversation(db: AsyncSession, user_id: str, conversation_id: str, data: CreateConversationRequest, is_archived: bool = None) -> ChatConversation:
+    """Updates title, prompt, or archive status."""
+    stmt = select(ChatConversation).where(ChatConversation.id == conversation_id, ChatConversation.user_id == user_id)
+    conversation = (await db.execute(stmt)).scalar_one_or_none()
     
-    model_config = ConfigDict(from_attributes=True)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+        
+    if data.title is not None:
+        conversation.title = data.title
+    if data.system_prompt is not None:
+        conversation.system_prompt = data.system_prompt
+    if is_archived is not None:
+        conversation.is_archived = is_archived
+        
+    await db.commit()
+    await db.refresh(conversation)
+    return conversation
 
 
-class SendMessageRequest(BaseModel):
-    content: str = Field(min_length=1, max_length=4000)
-    model: Optional[str] = None
-
-
-class ModelInfoResponse(BaseModel):
-    id: str
-    name: str
-    file_size_gb: Optional[float] = None
-    type: str = Field(pattern="^(text|vision)$")
+async def delete_conversation(db: AsyncSession, user_id: str, conversation_id: str, hard_delete: bool) -> None:
+    """Soft or hard deletes a conversation."""
+    stmt = select(ChatConversation).where(ChatConversation.id == conversation_id, ChatConversation.user_id == user_id)
+    conversation = (await db.execute(stmt)).scalar_one_or_none()
     
-class MessageCreate(BaseModel):
-    content: str
-    model: Optional[str] = None
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+        
+    if hard_delete:
+        await db.delete(conversation)
+    else:
+        conversation.is_archived = True
+        
+    await db.commit()
+
+
+async def save_message(db: AsyncSession, conversation_id: str, role: str, content: str, tokens_used: int = None, generation_ms: int = None, model: str = None) -> ChatMessage:
+    """Saves a single message and updates the conversation's message count and updated_at timestamp."""
+    message = ChatMessage(
+        conversation_id=conversation_id,
+        role=role,
+        content=content,
+        tokens_used=tokens_used,
+        generation_ms=generation_ms,
+        model_used=model
+    )
+    db.add(message)
+    
+    # Update conversation metadata
+    stmt = select(ChatConversation).where(ChatConversation.id == conversation_id)
+    conversation = (await db.execute(stmt)).scalar_one()
+    conversation.message_count += 1
+    
+    await db.commit()
+    return message
+
+
+async def verify_and_save_user_message(db: AsyncSession, user_id: str, conversation_id: str, data: ChatMessageRequest) -> None:
+    """Validates the conversation and saves the incoming user message."""
+    stmt = select(ChatConversation).where(ChatConversation.id == conversation_id, ChatConversation.user_id == user_id)
+    conversation = (await db.execute(stmt)).scalar_one_or_none()
+    
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+        
+    await save_message(db, conversation_id, role="user", content=data.content)
+    
+    # Auto-title on the very first user message
+    if conversation.message_count == 1 and conversation.title == "New Conversation":
+        await auto_title_conversation(db, conversation, data.content, data.model_used)
+
+
+async def auto_title_conversation(db: AsyncSession, conversation: ChatConversation, first_user_message: str, model: str) -> None:
+    """Asks the AI for a short title and updates the conversation."""
+    target_model = model or conversation.model_used
+    if not target_model:
+        target_model = await get_fallback_model()
+        
+    from app.utils.prompt_loader import load_prompt
+    system_instruction = load_prompt("chats/autotitle")
+    messages = [
+        {"role": "system", "content": system_instruction},
+        {"role": "user",   "content": first_user_message},
+    ]
+    
+    title_chunks = []
+    try:
+        async for chunk in ai_client.chat_stream(messages, target_model, max_tokens=10):
+            title_chunks.append(chunk)
+            
+        generated_title = "".join(title_chunks).strip().strip('"').strip("'")
+        
+        if generated_title:
+            conversation.title = generated_title
+            await db.commit()
+    except Exception as e:
+        print(f"Failed to auto-title conversation: {e}")
+
+
+async def stream_chat_response(db: AsyncSession, user_id: str, conversation_id: str, requested_model: str) -> AsyncGenerator[str, None]:
+    """
+    Streams the AI response back to the client via Server-Sent Events (SSE).
+    Once finished, saves the complete AI response to the database.
+    """
+    # 1. Fetch full conversation history WITH messages eager loaded
+    stmt = select(ChatConversation).where(
+        ChatConversation.id == conversation_id, 
+        ChatConversation.user_id == user_id
+    ).options(selectinload(ChatConversation.messages)) 
+    
+    conversation = (await db.execute(stmt)).scalar_one()
+    
+    # Dynamically select the model
+    target_model = requested_model or conversation.model_used
+    if not target_model:
+        target_model = await get_fallback_model()
+    
+    # Build payload for AI Server
+    messages_payload = []
+    if conversation.system_prompt:
+        messages_payload.append({"role": "system", "content": conversation.system_prompt})
+        
+    for msg in conversation.messages:
+        messages_payload.append({"role": msg.role, "content": msg.content})
+
+    # 2. Stream from AI Server
+    accumulated_content = []
+    start_time = time.time()
+    
+    try:
+        async for token in ai_client.chat_stream(messages_payload, target_model):
+            accumulated_content.append(token)
+            # Yield SSE formatted string
+            yield f"data: {json.dumps({'token': token})}\n\n"
+            
+    except Exception as e:
+        yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        
+    finally:
+        # Yield the required done signal
+        yield "data: [DONE]\n\n"
+        
+        # 3. Save assistant message to DB after stream finishes
+        full_response = "".join(accumulated_content)
+        if full_response:
+            generation_ms = int((time.time() - start_time) * 1000)
+            
+            await save_message(
+                db=db,
+                conversation_id=conversation_id,
+                role="assistant",
+                content=full_response,
+                generation_ms=generation_ms,
+                model=target_model
+            )
 </file>
 
 <file path="backend/app/services/translator_service.py">
@@ -11607,6 +11519,183 @@ async def get_page_file_path(db: AsyncSession, user_id: UUID, job_id: UUID, page
     return str(target_path)
 </file>
 
+<file path="backend/app/utils/ai_client.py">
+import json
+from typing import AsyncGenerator
+import httpx
+
+from app.core.config import settings
+
+class AIServerError(Exception):
+    def __init__(self, status_code: int, message: str):
+        self.status_code = status_code
+        self.message = message
+        super().__init__(message)
+
+
+class AIServerClient:
+    """Singleton async HTTP client for communicating with the AI inference server."""
+    
+    def __init__(self):
+        self.base_url = settings.AI_SERVER_URL
+        self._client: httpx.AsyncClient | None = None
+
+    @property
+    def client(self) -> httpx.AsyncClient:
+        if not self._client:
+            self._client = httpx.AsyncClient(base_url=self.base_url, timeout=300.0)
+        return self._client
+
+    async def chat_stream(
+        self,
+        messages: list[dict],
+        model: str,
+        max_tokens: int | None = None,  # None = let AI server use its .env MAX_TOKENS
+        temperature: float = 0.7,
+    ) -> AsyncGenerator[str, None]:
+        """
+        POST /v1/chat/completions with stream=True.
+        Parse SSE response and yield each token string.
+        """
+        payload = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            "temperature": temperature
+        }
+        # Only set max_tokens if explicitly passed — otherwise let AI server
+        # use its own .env MAX_TOKENS setting (avoids hardcoded 2048 override)
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        
+        async with self.client.stream("POST", "/v1/chat/completions", json=payload) as response:
+            response.raise_for_status()
+            
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    data = line[6:].strip()
+                    
+                    if data == "[DONE]":
+                        return
+                    
+                    if not data:
+                        continue
+                        
+                    try:
+                        parsed = json.loads(data)
+                        choices = parsed.get("choices", [])
+                        if choices:
+                            token = choices[0].get("delta", {}).get("content", "")
+                            if token:
+                                yield token
+                    except json.JSONDecodeError:
+                        continue
+
+    async def translate_image_vision_stream(
+        self, 
+        image_base64: str, 
+        source_language: str, 
+        target_language: str
+    ) -> AsyncGenerator[str | dict, None]:
+        
+        payload = {
+            "image": image_base64,
+            "source_language": source_language,
+            "target_language": target_language
+        }
+        
+        # Set timeout to None to completely disable connection dropping
+        timeout_config = httpx.Timeout(None) 
+        ai_url = "http://127.0.0.1:8001/v1/translate/image/stream"
+
+        async with httpx.AsyncClient(timeout=timeout_config) as client:
+            try:
+                async with client.stream("POST", ai_url, json=payload) as response:
+                    response.raise_for_status()
+                    
+                    # Use aiter_lines() to prevent SSE chunk fragmentation!
+                    async for line in response.aiter_lines():
+                        if line.startswith("data: "):
+                            data_str = line[6:].strip()
+                            if data_str:
+                                yield data_str
+                                
+            except Exception as e:
+                yield {"error": f"AI Client connection error: {str(e)}", "done": True}
+
+    async def translate_image(
+        self,
+        image_base64: str,
+        source_language: str,
+        target_language: str,
+    ) -> dict:
+        """POST /v1/translate/image. Returns {translated_text, bounding_boxes, original_text}."""
+        response = await self.client.post("/v1/translate/image", json={
+            "image": image_base64,
+            "source_language": source_language,
+            "target_language": target_language,
+        })
+        response.raise_for_status()
+        return response.json()
+
+    async def list_models(self) -> list[dict]:
+        """GET /v1/models. Returns list of available model info."""
+        response = await self.client.get("/v1/models")
+        response.raise_for_status()
+        return response.json().get("data", [])
+
+    async def health_check(self) -> bool:
+        """Returns True if AI server is healthy and model is loaded."""
+        try:
+            response = await self.client.get("/v1/health", timeout=5.0)
+            return response.json().get("model_loaded", False)
+        except Exception:
+            return False
+
+    async def ocr_pipeline(self, image_base64: str) -> list[dict]:
+        """
+        POST /v1/translate/ocr-pipeline
+        Executes Stages 1, 2, and 3 on the AI server in one shot.
+        Returns: [{"bbox": [x1,y1,x2,y2], "japanese": "text"}, ...]
+        Raises AIServerError on failure.
+        """
+        try:
+            response = await self.client.post(
+                "/v1/translate/ocr-pipeline",
+                json={"image": image_base64},
+                timeout=120.0,
+            )
+            response.raise_for_status()
+            return response.json()["regions"]
+        except httpx.ConnectError as e:
+            raise AIServerError(503, f"AI server unreachable: {e}") from e
+        except httpx.HTTPStatusError as e:
+            raise AIServerError(e.response.status_code, str(e)) from e
+
+
+    async def translate_batch(self, regions: list[dict]) -> list[dict]:
+        """
+        POST /v1/translate/batch
+        Triggers Hangoff Protocol on AI server side and translates.
+        Returns regions with "english" field populated.
+        """
+        try:
+            response = await self.client.post(
+                "/v1/translate/batch",
+                json={"regions": regions},
+                timeout=600.0,   # 35B model may need time for first load + inference
+            )
+            response.raise_for_status()
+            return response.json()["regions"]
+        except httpx.ConnectError as e:
+            raise AIServerError(503, f"AI server unreachable: {e}") from e
+        except httpx.HTTPStatusError as e:
+            raise AIServerError(e.response.status_code, str(e)) from e
+
+# Singleton instance — import this in services
+ai_client = AIServerClient()
+</file>
+
 <file path="frontend/src/App.tsx">
 import { Routes, Route, useLocation } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
@@ -11763,6 +11852,107 @@ export const ChatInput = () => {
 };
 
 export default ChatInput;
+</file>
+
+<file path="frontend/src/components/chat/ModelSelector.tsx">
+import { useQuery } from '@tanstack/react-query';
+import { ChevronDown, Cpu, Check } from 'lucide-react';
+import { useChatStore } from '@/store/chatStore';
+import { chatService } from '@/services/chat.service';
+import { cn } from '@/lib/utils';
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
+
+interface ModelInfo {
+  id: string;
+  name: string;
+  type: 'text' | 'vision';
+  size?: string;
+  context_window?: number;
+  description?: string; // 👈 Critical Field
+  is_loaded?: boolean;
+}
+
+export const ModelSelector = () => {
+  const { selectedModel, setModel } = useChatStore();
+
+  const { data: models, isLoading } = useQuery<ModelInfo[]>({
+    queryKey: ['chat-models'],
+    queryFn: () => chatService.getModels() as Promise<ModelInfo[]>,
+    staleTime: 0, // 👈 Force refresh immediately
+    refetchOnWindowFocus: true,
+  });
+
+  const currentModel = models?.find((m) => m.id === selectedModel);
+
+  if (isLoading) {
+    return (
+      <div className="h-10 w-48 bg-white/5 animate-pulse rounded-lg border border-white/5" />
+    );
+  }
+
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <button className="flex items-center gap-2 px-3 py-2 bg-white/5 border border-white/10 rounded-lg hover:bg-white/10 transition-all outline-none group">
+          <Cpu size={16} className="text-primary-400" />
+          <div className="flex flex-col items-start text-left">
+            <span className="text-xs font-bold text-white leading-none">
+              {currentModel?.name || 'Select Model'}
+            </span>
+            
+            {/* TRIGGER SUBTITLE */}
+            <span className="text-[10px] text-white/40 font-mono mt-0.5">
+              {currentModel?.description 
+                ? currentModel.description 
+                : (currentModel?.size ? `${currentModel.size} • ${currentModel.context_window}k ctx` : '')}
+            </span>
+          </div>
+          <ChevronDown size={14} className="text-white/20 group-hover:text-white/60 transition-colors ml-2" />
+        </button>
+      </DropdownMenu.Trigger>
+
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          className="z-50 min-w-[220px] bg-surface-900 border border-white/10 rounded-xl p-1 shadow-2xl animate-in fade-in zoom-in-95 duration-100"
+          sideOffset={8}
+          align="start"
+        >
+          <DropdownMenu.Label className="px-3 py-2 text-[10px] font-bold text-white/30 uppercase tracking-widest">
+            Select Mode
+          </DropdownMenu.Label>
+          
+          {models?.map((model) => (
+            <DropdownMenu.Item
+              key={model.id}
+              onClick={() => setModel(model.id)}
+              className={cn(
+                "flex items-center justify-between px-3 py-2.5 rounded-lg text-sm cursor-pointer outline-none transition-colors",
+                selectedModel === model.id ? "bg-primary-600/20 text-white" : "text-white/60 hover:bg-white/5 hover:text-white"
+              )}
+            >
+              <div className="flex flex-col">
+                <span className="font-medium">{model.name}</span>
+                
+                {/* 🟢 THE FIX: Checks for description first */}
+                {model.description ? (
+                   <span className="text-[10px] opacity-50 font-mono text-primary-300">
+                     {model.description}
+                   </span>
+                ) : (
+                   <span className="text-[10px] opacity-50 font-mono">
+                     {model.size} • {model.context_window}k ctx
+                   </span>
+                )}
+                
+              </div>
+              {selectedModel === model.id && <Check size={14} className="text-primary-400" />}
+            </DropdownMenu.Item>
+          ))}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+};
 </file>
 
 <file path="frontend/src/components/chat/TypingIndicator.tsx">
@@ -12924,6 +13114,45 @@ export const chatService = {
 }
 </file>
 
+<file path="frontend/src/types/chat.types.ts">
+export interface Conversation {
+  id: string
+  title: string
+  model_used: string | null
+  message_count: number
+  is_archived: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface Message {
+  id: string
+  conversation_id: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  timestamp: string;
+  tokens_used: number | null
+  generation_ms: number | null
+  model_used: string | null
+  created_at: string
+}
+
+export interface ConversationWithMessages extends Conversation {
+  messages: Message[]
+}
+
+export interface ModelInfo {
+  id: string
+  name: string
+  file_size_gb: number | null
+  type: 'text' | 'vision'
+  size?: string; 
+  description?: string;
+  context_window?: number;
+  is_loaded?: boolean;
+}
+</file>
+
 <file path="frontend/src/types/translator.types.ts">
 export type JobStatus = 'pending' | 'processing' | 'completed' | 'failed'
 export type PageStatus = 'pending' | 'processing' | 'done' | 'no_text' | 'failed'
@@ -13038,227 +13267,71 @@ print(f"[Config] Loading .env from: {_ENV_FILE}")
 print(f"[Config] MAX_TOKENS={settings.MAX_TOKENS}  N_CTX={settings.N_CTX}  CHAT_MODEL={settings.CHAT_MODEL}")
 </file>
 
-<file path="ai_server/app/routers/chat.py">
-import json
-import logging
-import time
-from typing import List, Dict, Optional, Any, Union
-from pathlib import Path
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+<file path="backend/app/schemas/chat.py">
+from datetime import datetime
+from typing import List, Optional
+from uuid import UUID
 
-from app.services.model_manager import model_manager
-from app.core.config import settings
+from pydantic import BaseModel, ConfigDict, Field
 
-router = APIRouter()
-logger = logging.getLogger(__name__)
-
-# ══════════════════════════════════════════════════════════════════════════
-#  TERMINAL VISUALIZATION HELPERS
-# ══════════════════════════════════════════════════════════════════════════
-W = 66
-def sep(c="="): print(c * W)
-def header(t):  sep(); print(f"  {t}"); sep()
-def row(l, v):  print(f"  {l:<34} {v}")
-
-def print_generation_stats(stats: dict):
-    print("\n")
-    header("Performance Report")
-    row("Model:",               f"{stats['model']}")
-    row("Prompt tokens:",       f"~{stats['n_prompt']} (est)")
-    row("Generated tokens:",    f"{stats['n_gen']}")
-    sep("-")
-    row("Time to first token:", f"{stats['ttft_ms']:.1f} ms")
-    row("Generation time:",     f"{stats['gen_time_s']:.2f} s")
-    row("Total time:",          f"{stats['total_time_s']:.2f} s")
-    sep("-")
-    row("Tokens / second:",     f"{stats['tps']:.2f} tok/s")
-    row("ms / token:",          f"{stats['mpt']:.2f} ms/tok")
+class ChatMessageRequest(BaseModel):
+    content: str  
+    model_used: Optional[str] = None  
     
-    # Check Hardware Stats
-    if model_manager._model:
-        try:
-            llm = model_manager._model
-            vram_mb = model_manager.get_vram_usage()
-            if vram_mb:
-                sep("-")
-                row("VRAM Usage:", f"{vram_mb} MB")
+class CreateConversationRequest(BaseModel):
+    title: Optional[str] = None
+    system_prompt: Optional[str] = None
 
-            # Layer Split Check
-            total_layers = 0
-            if hasattr(llm, "metadata") and llm.metadata:
-                for key in ["general.block_count", "llm.layer_count"]:
-                    if key in llm.metadata:
-                        total_layers = int(llm.metadata[key])
-                        break
-            
-            if total_layers > 0:
-                n_gpu = llm.n_gpu_layers
-                n_gpu_visual = min(n_gpu, total_layers)
-                n_ram = max(0, total_layers - n_gpu)
-                status = "(ALL GPU - FAST)" if n_ram == 0 else "(SPLIT - SLOWER)"
-                row("Layers on GPU:", f"{n_gpu_visual} / {total_layers}  {status}")
-        except Exception:
-            pass
-    sep()
-    print("\n")
 
-# ══════════════════════════════════════════════════════════════════════════
-#  SCHEMAS
-# ══════════════════════════════════════════════════════════════════════════
-class ChatCompletionRequest(BaseModel):
+class ConversationResponse(BaseModel):
+    id: UUID
+    title: str
+    model_used: Optional[str] = None
+    message_count: int
+    is_archived: bool
+    created_at: datetime
+    updated_at: datetime
+    
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MessageResponse(BaseModel):
+    id: UUID
+    conversation_id: UUID
+    role: str = Field(pattern="^(user|assistant|system)$")
+    content: str
+    tokens_used: Optional[int] = None
+    generation_ms: Optional[int] = None
+    model_used: Optional[str] = None
+    created_at: datetime
+    
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ConversationDetailResponse(ConversationResponse):
+    messages: List[MessageResponse]
+    
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SendMessageRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=4000)
     model: Optional[str] = None
-    messages: List[Dict[str, Any]]
-    stream: bool = True
+
+
+class ModelInfoResponse(BaseModel):
+    id: str
+    name: str
+    type: str = Field(pattern="^(text|vision)$")
+    file_size_gb: Optional[float] = None
+    is_loaded: bool = False
+    size: str = ""
+    context_window: int = 0
+    description: Optional[str] = None
     
-    # ✅ FIX: Change default from 2048 to None
-    # This allows the .env setting (32768) to take over below.
-    max_tokens: Optional[int] = None 
-    
-    temperature: Optional[float] = None  # None = read from .env TEMPERATURE
-    top_p: Optional[float] = None          # None = read from .env TOP_P
-    stop: Optional[Union[str, List[str]]] = None
-
-@router.post("/chat/completions")
-async def chat_completions(request: ChatCompletionRequest):
-    """
-    OpenAI-compatible chat completion endpoint.
-    Dynamically loads the requested model from the filesystem.
-    """
-    
-    # ── 1. Determine Target Model ────────────────────────────────────────────
-    target_model = request.model or getattr(settings, "CHAT_MODEL", None) or settings.DEFAULT_MODEL
-
-    if not target_model:
-        raise HTTPException(503, "No model specified and no default configured.")
-
-    # ── 2. Resolve Max Tokens (THE FIX) ──────────────────────────────────────
-    # Priority: 
-    # 1. Request (if frontend sends specific limit)
-    # 2. .env MAX_TOKENS (e.g., 32768)
-    # 3. Hard Fallback (2048) if nothing else is found
-    # settings now loads from .env via absolute path in config.py
-    final_max_tokens   = request.max_tokens   if request.max_tokens   is not None else settings.MAX_TOKENS
-    final_temperature  = request.temperature  if request.temperature  is not None else settings.TEMPERATURE
-    final_top_p        = request.top_p        if request.top_p        is not None else settings.TOP_P
-
-    # ── 3. Validation ────────────────────────────────────────────────────────
-    model_path = Path(settings.MODELS_DIR) / target_model
-    if not model_path.exists():
-        raise HTTPException(status_code=404, detail=f"Model '{target_model}' not found.")
-
-    # ── 4. Lazy Load (The VRAM Swap) ─────────────────────────────────────────
-    if model_manager.current_model_name != target_model:
-        print(f"\n[System] Switching model to: '{target_model}'...")
-        try:
-            await model_manager.load_model(target_model)
-        except Exception as e:
-            logger.error(f"Failed to load model {target_model}: {e}")
-            raise HTTPException(500, f"Failed to load model: {str(e)}")
-
-    # ── 5. Prepare Stop Sequences ────────────────────────────────────────────
-    stop_sequences = []
-    if request.stop:
-        stop_sequences = [request.stop] if isinstance(request.stop, str) else request.stop
-
-    # ── 6. Streaming Response ────────────────────────────────────────────────
-    if request.stream:
-        async def event_generator():
-            t0 = time.perf_counter()
-            first_token_time = None
-            n_gen = 0
-            
-            prompt_text = " ".join([m.get("content", "") for m in request.messages])
-            n_prompt_est = len(prompt_text) // 3
-
-            # Console Header
-            print("\n")
-            header(f"Generating ({target_model})")
-            row("Max tokens:", final_max_tokens)  # <--- Should now show 32768
-            row("Temp / Top-P:", f"{final_temperature} / {final_top_p}")
-            sep("-")
-            print("Output:", end=" ", flush=True)
-
-            try:
-                async for token in model_manager.generate_stream(
-                    messages=request.messages,
-                    max_tokens=final_max_tokens, # <--- Passing 32768 to llama_cpp
-                    temperature=final_temperature,
-                    top_p=final_top_p,
-                    stop=stop_sequences,
-                ):
-                    now = time.perf_counter()
-                    if first_token_time is None: first_token_time = now
-                    n_gen += 1
-                    
-                    print(token, end="", flush=True)
-
-                    chunk_data = {
-                        "id": f"chatcmpl-{int(time.time())}",
-                        "object": "chat.completion.chunk",
-                        "created": int(time.time()),
-                        "model": target_model,
-                        "choices": [{"index": 0, "delta": {"content": token}, "finish_reason": None}]
-                    }
-                    yield f"data: {json.dumps(chunk_data)}\n\n"
-                
-                # Stats calculation
-                t_end = time.perf_counter()
-                ttft = (first_token_time - t0) if first_token_time else 0
-                gen_time = (t_end - first_token_time) if first_token_time else 0
-                total_time = t_end - t0
-                tps = n_gen / gen_time if gen_time > 0 else 0
-                mpt = (gen_time / n_gen * 1000) if n_gen > 0 else 0
-
-                stats = {
-                    "model": target_model,
-                    "n_prompt": n_prompt_est,
-                    "n_gen": n_gen,
-                    "ttft_ms": ttft * 1000,
-                    "gen_time_s": gen_time,
-                    "total_time_s": total_time,
-                    "tps": tps,
-                    "mpt": mpt
-                }
-                
-                print_generation_stats(stats)
-                yield "data: [DONE]\n\n"
-
-            except Exception as e:
-                logger.error(f"Streaming error: {e}")
-                yield f"data: {json.dumps({'error': str(e)})}\n\n"
-
-        return StreamingResponse(
-            event_generator(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            }
-        )
-
-    # ── 7. Non-Streaming Fallback ────────────────────────────────────────────
-    else:
-        full_content = ""
-        async for token in model_manager.generate_stream(
-            messages=request.messages,
-            max_tokens=final_max_tokens,
-            temperature=final_temperature,
-            top_p=final_top_p,
-            stop=stop_sequences,
-        ):
-            full_content += token
-        
-        return {
-            "id": f"chatcmpl-{int(time.time())}",
-            "object": "chat.completion",
-            "created": int(time.time()),
-            "model": target_model,
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": full_content}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-        }
+class MessageCreate(BaseModel):
+    content: str
+    model: Optional[str] = None
 </file>
 
 <file path="frontend/src/components/chat/ChatWindow.tsx">
@@ -14449,103 +14522,236 @@ export const useTranslatorStore = create<TranslatorState>((set, get) => ({
 }))
 </file>
 
-<file path="ai_server/app/routers/models.py">
-import os
+<file path="ai_server/app/routers/chat.py">
+import json
+import logging
 import time
+from typing import List, Dict, Optional, Any, Union
 from pathlib import Path
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import List, Optional
 
-from app.core.config import settings
 from app.services.model_manager import model_manager
+from app.core.config import settings
+from app.utils.prompt_loader import load_prompt_for_model
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
-class ModelCard(BaseModel):
-    id: str
-    name: str
-    object: str = "model"
-    created: int = int(time.time())
-    owned_by: str = "user"
-    type: str
+# ══════════════════════════════════════════════════════════════════════════
+#  TERMINAL VISUALIZATION HELPERS
+# ══════════════════════════════════════════════════════════════════════════
+W = 66
+def sep(c="="): print(c * W)
+def header(t):  sep(); print(f"  {t}"); sep()
+def row(l, v):  print(f"  {l:<34} {v}")
+
+def print_generation_stats(stats: dict):
+    print("\n")
+    header("Performance Report")
+    row("Model:",               f"{stats['model']}")
+    row("Prompt tokens:",       f"~{stats['n_prompt']} (est)")
+    row("Generated tokens:",    f"{stats['n_gen']}")
+    sep("-")
+    row("Time to first token:", f"{stats['ttft_ms']:.1f} ms")
+    row("Generation time:",     f"{stats['gen_time_s']:.2f} s")
+    row("Total time:",          f"{stats['total_time_s']:.2f} s")
+    sep("-")
+    row("Tokens / second:",     f"{stats['tps']:.2f} tok/s")
+    row("ms / token:",          f"{stats['mpt']:.2f} ms/tok")
     
-    # Backend Fields
-    file_size_gb: Optional[float] = None
-    is_loaded: bool = False
+    # Check Hardware Stats
+    if model_manager._model:
+        try:
+            llm = model_manager._model
+            vram_mb = model_manager.get_vram_usage()
+            if vram_mb:
+                sep("-")
+                row("VRAM Usage:", f"{vram_mb} MB")
+
+            # Layer Split Check
+            total_layers = 0
+            if hasattr(llm, "metadata") and llm.metadata:
+                for key in ["general.block_count", "llm.layer_count"]:
+                    if key in llm.metadata:
+                        total_layers = int(llm.metadata[key])
+                        break
+            
+            if total_layers > 0:
+                n_gpu = llm.n_gpu_layers
+                n_gpu_visual = min(n_gpu, total_layers)
+                n_ram = max(0, total_layers - n_gpu)
+                status = "(ALL GPU - FAST)" if n_ram == 0 else "(SPLIT - SLOWER)"
+                row("Layers on GPU:", f"{n_gpu_visual} / {total_layers}  {status}")
+        except Exception:
+            pass
+    sep()
+    print("\n")
+
+# ══════════════════════════════════════════════════════════════════════════
+#  SCHEMAS
+# ══════════════════════════════════════════════════════════════════════════
+class ChatCompletionRequest(BaseModel):
+    model: Optional[str] = None
+    messages: List[Dict[str, Any]]
+    stream: bool = True
     
-    # Frontend Compatibility Fields
-    size: str              # e.g. "8.0 GB"
-    context_window: int    # e.g. 32
+    # ✅ FIX: Change default from 2048 to None
+    # This allows the .env setting (32768) to take over below.
+    max_tokens: Optional[int] = None 
+    
+    temperature: Optional[float] = None  # None = read from .env TEMPERATURE
+    top_p: Optional[float] = None          # None = read from .env TOP_P
+    stop: Optional[Union[str, List[str]]] = None
 
-class ModelsResponse(BaseModel):
-    object: str = "list"
-    data: List[ModelCard]
-
-@router.get("/models", response_model=ModelsResponse)
-async def list_models():
+@router.post("/chat/completions")
+async def chat_completions(request: ChatCompletionRequest):
     """
-    Returns models with correct metadata for the Frontend UI.
+    OpenAI-compatible chat completion endpoint.
+    Dynamically loads the requested model from the filesystem.
     """
-    models_dir = Path(settings.MODELS_DIR)
     
-    if not models_dir.exists():
-        return ModelsResponse(data=[])
+    # ── 1. Determine Target Model ────────────────────────────────────────────
+    target_model = request.model or getattr(settings, "CHAT_MODEL", None) or settings.DEFAULT_MODEL
 
-    data = []
-    for f in models_dir.iterdir():
-        if not f.is_file() or not f.name.endswith(".gguf"):
-            continue
-        if f.name.lower().startswith("mmproj-"):
-            continue
+    if not target_model:
+        raise HTTPException(503, "No model specified and no default configured.")
 
-        # 1. Improved Type Detection
-        name_lower = f.name.lower()
-        vision_keywords = ["llava", "vision", "moondream", "-vl-", "vl_"]
-        model_type = "vision" if any(k in name_lower for k in vision_keywords) else "text"
-        
-        # 2. Calculate Size
-        size_gb = f.stat().st_size / (1024 ** 3)
-        size_str = f"{size_gb:.1f} GB"
-        
-        # 3. Estimate Context Window
-        ctx = 32 # Default
-        if "128k" in name_lower: ctx = 128
-        elif "moondream" in name_lower: ctx = 2
-        elif "llama-3" in name_lower and "8b" in name_lower: ctx = 8
-        
-        # 4. Check Status
-        is_loaded = (
-            f.name == model_manager.current_model_name or 
-            f.name == model_manager.current_vision_model_name
+    # ── 2. Resolve Max Tokens (THE FIX) ──────────────────────────────────────
+    # Priority: 
+    # 1. Request (if frontend sends specific limit)
+    # 2. .env MAX_TOKENS (e.g., 32768)
+    # 3. Hard Fallback (2048) if nothing else is found
+    # settings now loads from .env via absolute path in config.py
+    final_max_tokens   = request.max_tokens   if request.max_tokens   is not None else settings.MAX_TOKENS
+    final_temperature  = request.temperature  if request.temperature  is not None else settings.TEMPERATURE
+    final_top_p        = request.top_p        if request.top_p        is not None else settings.TOP_P
+
+    # ── 3. Validation ────────────────────────────────────────────────────────
+    model_path = Path(settings.MODELS_DIR) / target_model
+    if not model_path.exists():
+        raise HTTPException(status_code=404, detail=f"Model '{target_model}' not found.")
+
+    # ── 4. Lazy Load (The VRAM Swap) ─────────────────────────────────────────
+    if model_manager.current_model_name != target_model:
+        print(f"\n[System] Switching model to: '{target_model}'...")
+        try:
+            await model_manager.load_model(target_model)
+        except Exception as e:
+            logger.error(f"Failed to load model {target_model}: {e}")
+            raise HTTPException(500, f"Failed to load model: {str(e)}")
+
+    # ── 5. Prepare Stop Sequences ────────────────────────────────────────────
+    stop_sequences = []
+    if request.stop:
+        stop_sequences = [request.stop] if isinstance(request.stop, str) else request.stop
+
+    # ── 6. Inject per-model system prompt if not already in the request ──────
+    messages = list(request.messages)
+    has_system = any(m.get("role") == "system" for m in messages)
+    if not has_system:
+        system_text = load_prompt_for_model(target_model)
+        if system_text:
+            messages.insert(0, {"role": "system", "content": system_text})
+
+    # ── 7. Streaming Response ────────────────────────────────────────────────
+    if request.stream:
+        async def event_generator():
+            t0 = time.perf_counter()
+            first_token_time = None
+            n_gen = 0
+            
+            prompt_text = " ".join([m.get("content", "") for m in request.messages])
+            n_prompt_est = len(prompt_text) // 3
+
+            # Console Header
+            print("\n")
+            header(f"Generating ({target_model})")
+            row("Max tokens:", final_max_tokens)  # <--- Should now show 32768
+            row("Temp / Top-P:", f"{final_temperature} / {final_top_p}")
+            sep("-")
+            print("Output:", end=" ", flush=True)
+
+            try:
+                async for token in model_manager.generate_stream(
+                    messages=messages,
+                    max_tokens=final_max_tokens, # <--- Passing 32768 to llama_cpp
+                    temperature=final_temperature,
+                    top_p=final_top_p,
+                    stop=stop_sequences,
+                ):
+                    now = time.perf_counter()
+                    if first_token_time is None: first_token_time = now
+                    n_gen += 1
+                    
+                    print(token, end="", flush=True)
+
+                    chunk_data = {
+                        "id": f"chatcmpl-{int(time.time())}",
+                        "object": "chat.completion.chunk",
+                        "created": int(time.time()),
+                        "model": target_model,
+                        "choices": [{"index": 0, "delta": {"content": token}, "finish_reason": None}]
+                    }
+                    yield f"data: {json.dumps(chunk_data)}\n\n"
+                
+                # Stats calculation
+                t_end = time.perf_counter()
+                ttft = (first_token_time - t0) if first_token_time else 0
+                gen_time = (t_end - first_token_time) if first_token_time else 0
+                total_time = t_end - t0
+                tps = n_gen / gen_time if gen_time > 0 else 0
+                mpt = (gen_time / n_gen * 1000) if n_gen > 0 else 0
+
+                stats = {
+                    "model": target_model,
+                    "n_prompt": n_prompt_est,
+                    "n_gen": n_gen,
+                    "ttft_ms": ttft * 1000,
+                    "gen_time_s": gen_time,
+                    "total_time_s": total_time,
+                    "tps": tps,
+                    "mpt": mpt
+                }
+                
+                print_generation_stats(stats)
+                yield "data: [DONE]\n\n"
+
+            except Exception as e:
+                logger.error(f"Streaming error: {e}")
+                yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            }
         )
 
-        data.append(ModelCard(
-            id=f.name,
-            name=f.name.replace(".gguf", "").replace("-", " ").title(),
-            type=model_type,
-            file_size_gb=round(size_gb, 1),
-            size=size_str,
-            context_window=ctx,
-            is_loaded=is_loaded
-        ))
-    
-    # Sort: Loaded first
-    data.sort(key=lambda x: (not x.is_loaded, x.name))
-    
-    return ModelsResponse(data=data)
-
-@router.post("/models/{model_name}/load")
-async def load_model(model_name: str):
-    await model_manager.load_model(model_name)
-    return {"status": "loaded", "model": model_name}
-
-@router.post("/models/prewarm-vision")
-async def prewarm_vision_model(background_tasks: BackgroundTasks):
-    if not model_manager.is_vision_model_loaded and settings.VISION_MODEL:
-        background_tasks.add_task(model_manager.load_vision_model, settings.VISION_MODEL)
-        return {"status": "warming_up", "model": settings.VISION_MODEL}
-    return {"status": "already_hot"}
+    # ── 7. Non-Streaming Fallback ────────────────────────────────────────────
+    else:
+        full_content = ""
+        async for token in model_manager.generate_stream(
+            messages=messages,
+            max_tokens=final_max_tokens,
+            temperature=final_temperature,
+            top_p=final_top_p,
+            stop=stop_sequences,
+        ):
+            full_content += token
+        
+        return {
+            "id": f"chatcmpl-{int(time.time())}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": target_model,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": full_content}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        }
 </file>
 
 <file path="frontend/src/pages/TranslatorPage.tsx">
@@ -14637,6 +14843,101 @@ export default function TranslatorPage() {
     </div>
   )
 }
+</file>
+
+<file path="ai_server/app/routers/models.py">
+import os
+import time
+from pathlib import Path
+from fastapi import APIRouter, BackgroundTasks
+from pydantic import BaseModel
+from typing import List, Optional
+
+from app.core.config import settings
+from app.services.model_manager import model_manager
+
+router = APIRouter()
+
+class ModelCard(BaseModel):
+    id: str
+    name: str
+    object: str = "model"
+    created: int = int(time.time())
+    owned_by: str = "user"
+    type: str
+    
+    # Fields
+    file_size_gb: Optional[float] = None
+    is_loaded: bool = False
+    size: str = ""             
+    context_window: int = 0
+    description: Optional[str] = None
+    prompt_key: Optional[str] = None  # maps to prompts/<key>.md
+
+class ModelsResponse(BaseModel):
+    object: str = "list"
+    data: List[ModelCard]
+
+@router.get("/models", response_model=ModelsResponse)
+async def list_models():
+    models_dir = Path(settings.MODELS_DIR)
+    if not models_dir.exists():
+        return ModelsResponse(data=[])
+
+    # 🟢 YOUR CONFIG: Matches your .env filenames exactly
+    presets = [
+        {
+            "filename": "Qwen3VL-8B-Instruct-Q8_0.gguf",
+            "display_name": "Fast (Qwen 3 8B)",
+            "description": "fast and can see things",
+            "type": "vision",
+            "prompt_key": "chats/fast",   # → prompts/chats/fast.md
+        },
+        {
+            "filename": "Qwen3.5-35B-A3B-UD-IQ3_S.gguf",
+            "display_name": "Thinking (Qwen 3.5 35B)",
+            "description": "use for difficult tasks",
+            "type": "text",
+            "prompt_key": "chats/thinking",  # → prompts/chats/thinking.md
+        }
+    ]
+
+    data = []
+    
+    for preset in presets:
+        file_path = models_dir / preset["filename"]
+        
+        # Only show if file exists on disk
+        if file_path.exists():
+            is_loaded = (
+                preset["filename"] == model_manager.current_model_name or 
+                preset["filename"] == model_manager.current_vision_model_name
+            )
+
+            data.append(ModelCard(
+                id=preset["filename"],
+                name=preset["display_name"],
+                type=preset["type"],
+                description=preset["description"],
+                prompt_key=preset.get("prompt_key"),
+                is_loaded=is_loaded,
+                size="0 GB",
+                context_window=0
+            ))
+
+    return ModelsResponse(data=data)
+
+@router.post("/models/{model_name}/load")
+async def load_model(model_name: str):
+    await model_manager.load_model(model_name)
+    return {"status": "loaded", "model": model_name}
+
+@router.post("/models/prewarm-vision")
+async def prewarm_vision_model(background_tasks: BackgroundTasks):
+    if not model_manager.is_vision_model_loaded and settings.VISION_MODEL:
+        background_tasks.add_task(model_manager.load_vision_model, settings.VISION_MODEL)
+        return {"status": "warming_up", "model": settings.VISION_MODEL}
+    return {"status": "already_hot"}
 </file>
 
 </files>

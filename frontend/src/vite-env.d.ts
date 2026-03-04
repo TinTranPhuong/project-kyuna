@@ -2,7 +2,7 @@
 
 interface ImportMetaEnv {
   readonly VITE_API_URL: string;
-  // Add other env variables here as you create them
+  readonly VITE_AI_SERVER_URL: string;
 }
 
 interface ImportMeta {
@@ -11,7 +11,6 @@ interface ImportMeta {
 
 /**
  * Radix UI Module Declarations
- * Fixes error in image_14b5fe.png
  */
 declare module '@radix-ui/react-dropdown-menu' {
   import * as React from 'react';
@@ -26,7 +25,6 @@ declare module '@radix-ui/react-dropdown-menu' {
 
 /**
  * React Syntax Highlighter Declarations
- * Fixes error in image_157cb5.png
  */
 declare module 'react-syntax-highlighter' {
   export const Prism: any;

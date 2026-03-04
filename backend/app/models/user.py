@@ -11,6 +11,8 @@ if TYPE_CHECKING:
     from app.models.session import PomodoroSession, UserSettings
     from app.models.chat import ChatConversation
     from app.models.translator import TranslationJob
+    from app.models.note import Note
+
 
 class User(Base):
     __tablename__ = "users"
@@ -19,41 +21,30 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     username: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
-    
+
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1", nullable=False)
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0", nullable=False)
     avatar_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), 
-        server_default=func.now(), 
-        onupdate=func.now()
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    # ─── Relationships ────────────────────────────────────────────────────────
-    
+    # ── Relationships ─────────────────────────────────────────────────────────
+
     settings: Mapped[Optional["UserSettings"]] = relationship(
-        "UserSettings", 
-        back_populates="user", 
-        uselist=False, 
-        cascade="all, delete-orphan"
+        "UserSettings", back_populates="user", uselist=False, cascade="all, delete-orphan"
     )
-    
     pomodoro_sessions: Mapped[List["PomodoroSession"]] = relationship(
-        "PomodoroSession", 
-        back_populates="user", 
-        cascade="all, delete-orphan"
+        "PomodoroSession", back_populates="user", cascade="all, delete-orphan"
     )
-    
     conversations: Mapped[List["ChatConversation"]] = relationship(
-        "ChatConversation", 
-        back_populates="user", 
-        cascade="all, delete-orphan"
+        "ChatConversation", back_populates="user", cascade="all, delete-orphan"
     )
-    
     translation_jobs: Mapped[List["TranslationJob"]] = relationship(
-        "TranslationJob", 
-        back_populates="user", 
-        cascade="all, delete-orphan"
+        "TranslationJob", back_populates="user", cascade="all, delete-orphan"
+    )
+    notes: Mapped[List["Note"]] = relationship(
+        "Note", back_populates="user", cascade="all, delete-orphan"
     )
