@@ -74,7 +74,7 @@ export const ChatWindow = () => {
             Start a conversation...
           </h2>
           <p className="text-white/70 leading-relaxed text-sm font-medium">
-            Ask me anything or use an agent to help you with your tasks.
+            Ask me anything.
           </p>
         </div>
       </div>

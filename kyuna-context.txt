@@ -2198,7 +2198,7 @@ export const ModelSelector = () => {
           align="start"
         >
           <DropdownMenu.Label className="px-3 py-2 text-[10px] font-bold text-white/30 uppercase tracking-widest">
-            Available Agents
+            Available Mode
           </DropdownMenu.Label>
           
           {models?.map((model) => (
@@ -6341,6 +6341,7 @@ class AISettings(BaseSettings):
     DEFAULT_MODEL: str = ""                # filename of model in MODELS_DIR
     TRANSLATION_MODEL: str = ""
     DETECTOR_MODEL: str = ""
+    CHAT_MODEL: str = ""
     VISION_MODEL: str = ""                 # filename of Vision GGUF in MODELS_DIR, e.g. "Qwen3VL-8B-Instruct-Q8_0.gguf"
     MMPROJ_FILE: str  = ""                 # filename of CLIP projector, e.g. "mmproj-Qwen3VL-8B-Instruct-F16.gguf"
     MODELS_DIR: str = "./models"
@@ -6400,7 +6401,11 @@ async def health():
 
 <file path="ai_server/app/routers/chat.py">
 import json
-from typing import List, Dict, Optional, Any
+import logging
+import time
+import math
+from typing import List, Dict, Optional, Any, Union
+from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -6409,93 +6414,214 @@ from app.services.model_manager import model_manager
 from app.core.config import settings
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
+# ══════════════════════════════════════════════════════════════════════════
+#  TERMINAL VISUALIZATION HELPERS
+# ══════════════════════════════════════════════════════════════════════════
+W = 66
+def sep(c="="): print(c * W)
+def header(t):  sep(); print(f"  {t}"); sep()
+def row(l, v):  print(f"  {l:<34} {v}")
+
+def print_generation_stats(stats: dict):
+    print("\n")
+    header("Performance Report")
+    row("Model:",               f"{stats['model']}")
+    row("Prompt tokens:",       f"~{stats['n_prompt']} (est)")
+    row("Generated tokens:",    f"{stats['n_gen']}")
+    sep("-")
+    row("Time to first token:", f"{stats['ttft_ms']:.1f} ms")
+    row("Generation time:",     f"{stats['gen_time_s']:.2f} s")
+    row("Total time:",          f"{stats['total_time_s']:.2f} s")
+    sep("-")
+    row("Tokens / second:",     f"{stats['tps']:.2f} tok/s")
+    row("ms / token:",          f"{stats['mpt']:.2f} ms/tok")
+    
+    # Check Hardware Stats
+    if model_manager._model:
+        try:
+            llm = model_manager._model
+            vram_mb = model_manager.get_vram_usage()
+            
+            if vram_mb:
+                sep("-")
+                row("VRAM Usage:", f"{vram_mb} MB")
+
+            # Layer Split Check
+            total_layers = 0
+            if hasattr(llm, "metadata") and llm.metadata:
+                for key in ["general.block_count", "llm.layer_count"]:
+                    if key in llm.metadata:
+                        total_layers = int(llm.metadata[key])
+                        break
+            
+            if total_layers > 0:
+                n_gpu = llm.n_gpu_layers
+                n_gpu_visual = min(n_gpu, total_layers)
+                n_ram = max(0, total_layers - n_gpu)
+                
+                status = "(ALL GPU - FAST)" if n_ram == 0 else "(SPLIT - SLOWER)"
+                row("Layers on GPU:", f"{n_gpu_visual} / {total_layers}  {status}")
+                if n_ram > 0:
+                    row("Layers on CPU:",  f"{n_ram} / {total_layers}")
+        except Exception:
+            pass
+    sep()
+    print("\n")
+
+# ══════════════════════════════════════════════════════════════════════════
+#  SCHEMAS
+# ══════════════════════════════════════════════════════════════════════════
 class ChatCompletionRequest(BaseModel):
-    model: str
+    model: Optional[str] = None
     messages: List[Dict[str, Any]]
     stream: bool = True
-    max_tokens: int = 2048
-    temperature: float = 0.7
-    top_p: float = 0.95
-    stop: Optional[List[str]] = None
-
-async def ensure_text_model_loaded(requested_model: str):
-    """Helper to lazy-load the text model if it isn't running or if a swap is needed."""
-    model_to_load = requested_model if requested_model else settings.DEFAULT_MODEL
-    
-    if not model_to_load:
-        raise HTTPException(
-            status_code=503, 
-            detail="No text model specified in request and no DEFAULT_MODEL configured in .env"
-        )
-        
-    if model_manager.current_model_name != model_to_load:
-        print(f"Lazy-loading text model: {model_to_load}...")
-        await model_manager.load_model(model_to_load)
-
+    max_tokens: Optional[int] = 2048
+    temperature: Optional[float] = 0.7
+    top_p: Optional[float] = 0.95
+    stop: Optional[Union[str, List[str]]] = None
 
 @router.post("/chat/completions")
 async def chat_completions(request: ChatCompletionRequest):
     """
     OpenAI-compatible chat completion endpoint.
-    Automatically handles VRAM model swapping via the Hangoff Protocol.
+    Dynamically loads the requested model from the filesystem.
     """
-    # 1. Lazy load text model if needed
-    await ensure_text_model_loaded(request.model)
+    
+    # ── 1. Determine Target Model ────────────────────────────────────────────
+    # Priority: Request -> .env CHAT -> .env DEFAULT
+    target_model = request.model or getattr(settings, "CHAT_MODEL", None) or settings.DEFAULT_MODEL
 
+    if not target_model:
+        raise HTTPException(503, "No model specified and no default configured.")
+
+    # ── 2. Validation ────────────────────────────────────────────────────────
+    model_path = Path(settings.MODELS_DIR) / target_model
+    if not model_path.exists():
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Model '{target_model}' not found on server."
+        )
+
+    # ── 3. Lazy Load (The VRAM Swap) ─────────────────────────────────────────
+    # If the requested model is different from what is loaded, swap it.
+    if model_manager.current_model_name != target_model:
+        print(f"\n[System] Switching model to: '{target_model}'...")
+        try:
+            await model_manager.load_model(target_model)
+        except Exception as e:
+            logger.error(f"Failed to load model {target_model}: {e}")
+            raise HTTPException(500, f"Failed to load model: {str(e)}")
+
+    # ── 4. Prepare Stop Sequences ────────────────────────────────────────────
+    # FIX: This was missing/misplaced in previous versions
+    stop_sequences = []
+    if request.stop:
+        stop_sequences = [request.stop] if isinstance(request.stop, str) else request.stop
+
+    # ── 5. Streaming Response ────────────────────────────────────────────────
     if request.stream:
         async def event_generator():
+            # Stats tracking
+            t0 = time.perf_counter()
+            first_token_time = None
+            n_gen = 0
+            
+            prompt_text = " ".join([m.get("content", "") for m in request.messages])
+            n_prompt_est = len(prompt_text) // 3
+
+            # Console Header
+            print("\n")
+            header(f"Generating ({target_model})")
+            row("Max tokens:", request.max_tokens)
+            row("Temp / Top-P:", f"{request.temperature} / {request.top_p}")
+            sep("-")
+            print("Output:", end=" ", flush=True)
+
             try:
+                # Pass stop_sequences clearly here
                 async for token in model_manager.generate_stream(
                     messages=request.messages,
                     max_tokens=request.max_tokens,
                     temperature=request.temperature,
                     top_p=request.top_p,
-                    stop=request.stop,
+                    stop=stop_sequences,
                 ):
-                    # OpenAI SSE format
-                    chunk = {"choices": [{"delta": {"content": token}}]}
-                    yield f"data: {json.dumps(chunk)}\n\n"
-            except Exception as e:
-                error_chunk = {"error": str(e)}
-                yield f"data: {json.dumps(error_chunk)}\n\n"
-            finally:
+                    now = time.perf_counter()
+                    if first_token_time is None:
+                        first_token_time = now
+                    
+                    n_gen += 1
+                    
+                    # Terminal Stream
+                    print(token, end="", flush=True)
+
+                    # Frontend Stream (SSE)
+                    chunk_data = {
+                        "id": f"chatcmpl-{int(time.time())}",
+                        "object": "chat.completion.chunk",
+                        "created": int(time.time()),
+                        "model": target_model,
+                        "choices": [{"index": 0, "delta": {"content": token}, "finish_reason": None}]
+                    }
+                    yield f"data: {json.dumps(chunk_data)}\n\n"
+                
+                # Stats calculation
+                t_end = time.perf_counter()
+                ttft = (first_token_time - t0) if first_token_time else 0
+                gen_time = (t_end - first_token_time) if first_token_time else 0
+                total_time = t_end - t0
+                tps = n_gen / gen_time if gen_time > 0 else 0
+                mpt = (gen_time / n_gen * 1000) if n_gen > 0 else 0
+
+                stats = {
+                    "model": target_model,
+                    "n_prompt": n_prompt_est,
+                    "n_gen": n_gen,
+                    "ttft_ms": ttft * 1000,
+                    "gen_time_s": gen_time,
+                    "total_time_s": total_time,
+                    "tps": tps,
+                    "mpt": mpt
+                }
+                
+                print_generation_stats(stats)
                 yield "data: [DONE]\n\n"
+
+            except Exception as e:
+                logger.error(f"Streaming error: {e}")
+                yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
         return StreamingResponse(
             event_generator(),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no",  # disable Nginx buffering for SSE
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
             }
         )
+
+    # ── 6. Non-Streaming Fallback ────────────────────────────────────────────
     else:
-        # Non-streaming mode: accumulate all tokens before returning
-        full_text = ""
+        full_content = ""
         async for token in model_manager.generate_stream(
             messages=request.messages,
             max_tokens=request.max_tokens,
             temperature=request.temperature,
             top_p=request.top_p,
-            stop=request.stop,
+            stop=stop_sequences,
         ):
-            full_text += token
-
+            full_content += token
+        
         return {
-            "id": "chatcmpl-local",
+            "id": f"chatcmpl-{int(time.time())}",
             "object": "chat.completion",
-            "model": request.model,
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": full_text
-                    },
-                    "finish_reason": "stop"
-                }
-            ]
+            "created": int(time.time()),
+            "model": target_model,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": full_content}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         }
 </file>
 
@@ -7665,6 +7791,10 @@ class ModelInfoResponse(BaseModel):
     name: str
     file_size_gb: Optional[float] = None
     type: str = Field(pattern="^(text|vision)$")
+    
+class MessageCreate(BaseModel):
+    content: str
+    model: Optional[str] = None
 </file>
 
 <file path="backend/app/schemas/translator.py">
@@ -8463,12 +8593,12 @@ export const TypingIndicator = () => {
               transition={{
                 delay: i * 0.2 // Sequential stagger delay
               }}
-              className="w-1.5 h-1.5 rounded-full bg-primary-400"
+              className="w-1.5 h-1.5 rounded-full bg-primary-800"
             />
           ))}
         </div>
         
-        <span className="text-[10px] text-white/20 font-medium px-1 uppercase tracking-widest">
+        <span className="text-[10px] text-white/80 font-medium px-1 uppercase tracking-widest">
           Kyuna is thinking
         </span>
       </div>
@@ -11024,69 +11154,100 @@ export interface ModelInfo {
 </file>
 
 <file path="ai_server/app/routers/models.py">
+import os
+import time
 from pathlib import Path
 from fastapi import APIRouter, BackgroundTasks
+from pydantic import BaseModel
+from typing import List, Optional
 
 from app.core.config import settings
 from app.services.model_manager import model_manager
 
 router = APIRouter()
 
-@router.get("/models")
+class ModelCard(BaseModel):
+    id: str
+    name: str
+    object: str = "model"
+    created: int = int(time.time())
+    owned_by: str = "user"
+    type: str
+    
+    # Required for UI
+    file_size_gb: Optional[float] = None
+    size: str              # e.g. "8.0 GB"
+    context_window: int    # e.g. 32
+    is_loaded: bool = False
+
+class ModelsResponse(BaseModel):
+    object: str = "list"
+    data: List[ModelCard]
+
+@router.get("/models", response_model=ModelsResponse)
 async def list_models():
     """
-    List all available GGUF model files.
-    Returns OpenAI-compatible format: {"data": [...]}
+    Returns models with correct metadata for the Frontend UI.
     """
-    model_files = model_manager.list_models()
-    models = []
+    models_dir = Path(settings.MODELS_DIR)
     
-    for filename in model_files:
-        # Prevent the UI from seeing vision projectors as standalone models
-        if filename.lower().startswith("mmproj-"):
+    if not models_dir.exists():
+        return ModelsResponse(data=[])
+
+    data = []
+    for f in models_dir.iterdir():
+        if not f.is_file() or not f.name.endswith(".gguf"):
             continue
-            
-        file_path = Path(settings.MODELS_DIR) / filename
-        file_size_gb = file_path.stat().st_size / (1024 ** 3) if file_path.exists() else None
+        if f.name.lower().startswith("mmproj-"):
+            continue
+
+        # 1. Improved Type Detection
+        # Only flag as 'vision' if it explicitly says 'vl', 'vision', or 'llava'
+        name_lower = f.name.lower()
+        vision_keywords = ["llava", "vision", "moondream", "-vl-", "vl_"]
+        model_type = "vision" if any(k in name_lower for k in vision_keywords) else "text"
         
-        vision_keywords = ["llava", "vision", "moondream", "qwen"]
-        model_type = "vision" if any(x in filename.lower() for x in vision_keywords) else "text"
+        # 2. Calculate Size
+        size_gb = f.stat().st_size / (1024 ** 3)
+        size_str = f"{size_gb:.1f} GB"
         
-        # FIX: Check both text and vision slots to accurately report VRAM status to the UI
+        # 3. Estimate Context Window
+        ctx = 32 # Default
+        if "128k" in name_lower: ctx = 128
+        elif "moondream" in name_lower: ctx = 2
+        elif "llama-3" in name_lower and "8b" in name_lower: ctx = 8
+        
+        # 4. Check Status
         is_loaded = (
-            filename == model_manager.current_model_name or 
-            filename == model_manager.current_vision_model_name
+            f.name == model_manager.current_model_name or 
+            f.name == model_manager.current_vision_model_name
         )
-        
-        models.append({
-            "id": filename,
-            "name": filename.replace(".gguf", "").replace("-", " ").title(),
-            "file_size_gb": round(file_size_gb, 1) if file_size_gb else None,
-            "type": model_type,
-            "is_loaded": is_loaded,
-        })
-        
-    return {"object": "list", "data": models}
+
+        data.append(ModelCard(
+            id=f.name,
+            name=f.name.replace(".gguf", "").replace("-", " ").title(),
+            type=model_type,
+            file_size_gb=round(size_gb, 1),
+            size=size_str,
+            context_window=ctx,
+            is_loaded=is_loaded
+        ))
+    
+    # Sort: Loaded first
+    data.sort(key=lambda x: (not x.is_loaded, x.name))
+    
+    return ModelsResponse(data=data)
 
 @router.post("/models/{model_name}/load")
 async def load_model(model_name: str):
-    """Explicitly load a text model. Useful for pre-warming before first chat request."""
     await model_manager.load_model(model_name)
     return {"status": "loaded", "model": model_name}
 
-# NEW: The Phase 4 Latency Fix
 @router.post("/models/prewarm-vision")
 async def prewarm_vision_model(background_tasks: BackgroundTasks):
-    """
-    Fired by the frontend when navigating to the translator UI.
-    Triggers the VRAM Hangoff Protocol early so the model is hot 
-    by the time the user actually uploads an image.
-    """
     if not model_manager.is_vision_model_loaded and settings.VISION_MODEL:
-        # Load in the background so it doesn't block the frontend UI router
         background_tasks.add_task(model_manager.load_vision_model, settings.VISION_MODEL)
         return {"status": "warming_up", "model": settings.VISION_MODEL}
-        
     return {"status": "already_hot"}
 </file>
 
@@ -12202,7 +12363,7 @@ export const ChatWindow = () => {
             Start a conversation...
           </h2>
           <p className="text-white/70 leading-relaxed text-sm font-medium">
-            Ask me anything or use an agent to help you with your tasks.
+            Ask me anything.
           </p>
         </div>
       </div>
@@ -13374,18 +13535,18 @@ export default function ChatbotPage() {
             </div>
 
             {/* Conversation List */}
-            <div className="h-[45%] overflow-y-auto border-y border-white/10 p-2">
+            <div className="h-[70%] overflow-y-auto border-y border-white/10 p-2">
               <ConversationList />
             </div>
 
             {/* Models & Tools */}
             <div className="flex-1 overflow-y-auto p-4 space-y-6">
               <section>
-                <h3 className="text-[10px] font-bold text-white/40 uppercase tracking-widest mb-3 px-1">Active Agent</h3>
+                <h3 className="text-[11px] font-bold text-white/40 uppercase tracking-widest mb-3 px-1">Select Mode</h3>
                 <ModelSelector />
               </section>
               <section>
-                <ToolsPanel />
+                
               </section>
             </div>
           </div>
@@ -13411,7 +13572,7 @@ export default function ChatbotPage() {
               </div>
               <div className="flex-1 overflow-y-auto p-4 space-y-6">
                 <section>
-                  <h3 className="text-[10px] font-bold text-white/40 uppercase tracking-widest mb-3 px-1">Active Agent</h3>
+                  <h3 className="text-[10px] font-bold text-white/40 uppercase tracking-widest mb-3 px-1">Select Mode</h3>
                   <ModelSelector />
                 </section>
                 <ToolsPanel />
@@ -13572,11 +13733,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }))
 
     try {
-      const stream = await chatService.sendMessageStream(
+      const stream = chatService.sendMessageStream(
         activeConversationId,
         content,
         selectedModel,
         controller.signal,
+        
       )
 
       let fullContent = ''
@@ -14038,7 +14200,7 @@ export default function TranslatorPage() {
       {/* Right Column (35%) — Flexible Sidebar */}
       <div className="flex-[35] flex flex-col h-full min-w-0 shrink-0 bg-black/50 ">
 
-        {/* BOX 1: HISTORY (30% split) */}
+        {/* BOX 1: HISTORY (20% split) */}
         {jobs.length > 0 && (
           <div className="flex-[20] min-h-0 overflow-y-auto p-4 custom-scrollbar flex flex-col bg-transparent">
             <h4 className="text-[14px] font-bold text-white/40 uppercase tracking-wider mb-3 sticky top-0 z-10">
@@ -14050,7 +14212,7 @@ export default function TranslatorPage() {
           </div>
         )}
 
-        {/* BOX 2: REFERENCE / UPLOAD (70% split) */}
+        {/* BOX 2: REFERENCE / UPLOAD (80% split) */}
         <div className="flex-[80] min-h-0 overflow-hidden flex flex-col bg-transparent">
           {!activeJob ? (
             <div className="flex-1 p-4 overflow-y-auto custom-scrollbar">

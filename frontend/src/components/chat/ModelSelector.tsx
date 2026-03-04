@@ -48,7 +48,7 @@ export const ModelSelector = () => {
           align="start"
         >
           <DropdownMenu.Label className="px-3 py-2 text-[10px] font-bold text-white/30 uppercase tracking-widest">
-            Available Agents
+            Available Mode
           </DropdownMenu.Label>
           
           {models?.map((model) => (

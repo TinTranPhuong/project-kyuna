@@ -52,7 +52,7 @@ export default function TranslatorPage() {
       {/* Right Column (35%) — Flexible Sidebar */}
       <div className="flex-[35] flex flex-col h-full min-w-0 shrink-0 bg-black/50 ">
 
-        {/* BOX 1: HISTORY (30% split) */}
+        {/* BOX 1: HISTORY (20% split) */}
         {jobs.length > 0 && (
           <div className="flex-[20] min-h-0 overflow-y-auto p-4 custom-scrollbar flex flex-col bg-transparent">
             <h4 className="text-[14px] font-bold text-white/40 uppercase tracking-wider mb-3 sticky top-0 z-10">
@@ -64,7 +64,7 @@ export default function TranslatorPage() {
           </div>
         )}
 
-        {/* BOX 2: REFERENCE / UPLOAD (70% split) */}
+        {/* BOX 2: REFERENCE / UPLOAD (80% split) */}
         <div className="flex-[80] min-h-0 overflow-hidden flex flex-col bg-transparent">
           {!activeJob ? (
             <div className="flex-1 p-4 overflow-y-auto custom-scrollbar">

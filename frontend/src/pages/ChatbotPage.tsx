@@ -105,18 +105,18 @@ export default function ChatbotPage() {
             </div>
 
             {/* Conversation List */}
-            <div className="h-[45%] overflow-y-auto border-y border-white/10 p-2">
+            <div className="h-[70%] overflow-y-auto border-y border-white/10 p-2">
               <ConversationList />
             </div>
 
             {/* Models & Tools */}
             <div className="flex-1 overflow-y-auto p-4 space-y-6">
               <section>
-                <h3 className="text-[10px] font-bold text-white/40 uppercase tracking-widest mb-3 px-1">Active Agent</h3>
+                <h3 className="text-[11px] font-bold text-white/40 uppercase tracking-widest mb-3 px-1">Select Mode</h3>
                 <ModelSelector />
               </section>
               <section>
-                <ToolsPanel />
+                
               </section>
             </div>
           </div>
@@ -142,7 +142,7 @@ export default function ChatbotPage() {
               </div>
               <div className="flex-1 overflow-y-auto p-4 space-y-6">
                 <section>
-                  <h3 className="text-[10px] font-bold text-white/40 uppercase tracking-widest mb-3 px-1">Active Agent</h3>
+                  <h3 className="text-[10px] font-bold text-white/40 uppercase tracking-widest mb-3 px-1">Select Mode</h3>
                   <ModelSelector />
                 </section>
                 <ToolsPanel />

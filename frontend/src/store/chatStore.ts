@@ -144,11 +144,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }))
 
     try {
-      const stream = await chatService.sendMessageStream(
+      const stream = chatService.sendMessageStream(
         activeConversationId,
         content,
         selectedModel,
         controller.signal,
+        
       )
 
       let fullContent = ''

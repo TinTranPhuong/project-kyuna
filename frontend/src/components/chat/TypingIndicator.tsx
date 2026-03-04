@@ -37,12 +37,12 @@ export const TypingIndicator = () => {
               transition={{
                 delay: i * 0.2 // Sequential stagger delay
               }}
-              className="w-1.5 h-1.5 rounded-full bg-primary-400"
+              className="w-1.5 h-1.5 rounded-full bg-primary-800"
             />
           ))}
         </div>
         
-        <span className="text-[10px] text-white/20 font-medium px-1 uppercase tracking-widest">
+        <span className="text-[10px] text-white/80 font-medium px-1 uppercase tracking-widest">
           Kyuna is thinking
         </span>
       </div>

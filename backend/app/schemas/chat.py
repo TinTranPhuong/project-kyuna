@@ -54,3 +54,7 @@ class ModelInfoResponse(BaseModel):
     name: str
     file_size_gb: Optional[float] = None
     type: str = Field(pattern="^(text|vision)$")
+    
+class MessageCreate(BaseModel):
+    content: str
+    model: Optional[str] = None

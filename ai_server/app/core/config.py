@@ -4,6 +4,7 @@ class AISettings(BaseSettings):
     DEFAULT_MODEL: str = ""                # filename of model in MODELS_DIR
     TRANSLATION_MODEL: str = ""
     DETECTOR_MODEL: str = ""
+    CHAT_MODEL: str = ""
     VISION_MODEL: str = ""                 # filename of Vision GGUF in MODELS_DIR, e.g. "Qwen3VL-8B-Instruct-Q8_0.gguf"
     MMPROJ_FILE: str  = ""                 # filename of CLIP projector, e.g. "mmproj-Qwen3VL-8B-Instruct-F16.gguf"
     MODELS_DIR: str = "./models"
