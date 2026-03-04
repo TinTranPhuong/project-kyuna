@@ -1,21 +1,43 @@
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Resolve .env relative to THIS file, not the working directory.
+# config.py is at: ai_server/app/core/config.py
+# .env is at:      ai_server/.env
+# So we go up 3 levels: core -> app -> ai_server
+_ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
+
 class AISettings(BaseSettings):
-    DEFAULT_MODEL: str = ""                # filename of model in MODELS_DIR
+    DEFAULT_MODEL: str = ""
+    CHAT_MODEL: str = ""
     TRANSLATION_MODEL: str = ""
     DETECTOR_MODEL: str = ""
-    CHAT_MODEL: str = ""
-    VISION_MODEL: str = ""                 # filename of Vision GGUF in MODELS_DIR, e.g. "Qwen3VL-8B-Instruct-Q8_0.gguf"
-    MMPROJ_FILE: str  = ""                 # filename of CLIP projector, e.g. "mmproj-Qwen3VL-8B-Instruct-F16.gguf"
+    VISION_MODEL: str = ""
+    MMPROJ_FILE: str = ""
     MODELS_DIR: str = "./models"
     MIN_CONFIDENCE: float = 0
-    N_GPU_LAYERS: int = -1                 # -1 = all on GPU
-    N_CTX: int = 4096                      # context window (can be overridden to 30000 via .env)
-    N_THREADS: int = 8                     # CPU threads
+    N_GPU_LAYERS: int = -1
+    N_CTX: int = 4096
+    N_THREADS: int = 8
     MAX_CONCURRENT_REQUESTS: int = 3
     PORT: int = 8001
-    
-    # Tell Pydantic to ignore the extra variables in your .env file
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    # Generation defaults — loaded from .env
+    MAX_TOKENS: int = 2048
+    TEMPERATURE: float = 0.7
+    TOP_P: float = 0.9
+    TOP_K: int = 40
+    REPEAT_PENALTY: float = 1.1
+    MAX_THINK_TOKENS: int = 24576
+
+    model_config = SettingsConfigDict(
+        env_file=str(_ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
 settings = AISettings()
+
+# Debug: print on startup so you can confirm the path is correct
+print(f"[Config] Loading .env from: {_ENV_FILE}")
+print(f"[Config] MAX_TOKENS={settings.MAX_TOKENS}  N_CTX={settings.N_CTX}  CHAT_MODEL={settings.CHAT_MODEL}")

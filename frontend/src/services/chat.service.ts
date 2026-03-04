@@ -70,7 +70,7 @@ export const chatService = {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ content, model }),
+        body: JSON.stringify({ content, model_used: model }), 
       },
     )
 

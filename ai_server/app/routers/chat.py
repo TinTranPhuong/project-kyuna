@@ -1,7 +1,6 @@
 import json
 import logging
 import time
-import math
 from typing import List, Dict, Optional, Any, Union
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
@@ -41,7 +40,6 @@ def print_generation_stats(stats: dict):
         try:
             llm = model_manager._model
             vram_mb = model_manager.get_vram_usage()
-            
             if vram_mb:
                 sep("-")
                 row("VRAM Usage:", f"{vram_mb} MB")
@@ -58,11 +56,8 @@ def print_generation_stats(stats: dict):
                 n_gpu = llm.n_gpu_layers
                 n_gpu_visual = min(n_gpu, total_layers)
                 n_ram = max(0, total_layers - n_gpu)
-                
                 status = "(ALL GPU - FAST)" if n_ram == 0 else "(SPLIT - SLOWER)"
                 row("Layers on GPU:", f"{n_gpu_visual} / {total_layers}  {status}")
-                if n_ram > 0:
-                    row("Layers on CPU:",  f"{n_ram} / {total_layers}")
         except Exception:
             pass
     sep()
@@ -75,9 +70,13 @@ class ChatCompletionRequest(BaseModel):
     model: Optional[str] = None
     messages: List[Dict[str, Any]]
     stream: bool = True
-    max_tokens: Optional[int] = 2048
-    temperature: Optional[float] = 0.7
-    top_p: Optional[float] = 0.95
+    
+    # ✅ FIX: Change default from 2048 to None
+    # This allows the .env setting (32768) to take over below.
+    max_tokens: Optional[int] = None 
+    
+    temperature: Optional[float] = None  # None = read from .env TEMPERATURE
+    top_p: Optional[float] = None          # None = read from .env TOP_P
     stop: Optional[Union[str, List[str]]] = None
 
 @router.post("/chat/completions")
@@ -88,22 +87,27 @@ async def chat_completions(request: ChatCompletionRequest):
     """
     
     # ── 1. Determine Target Model ────────────────────────────────────────────
-    # Priority: Request -> .env CHAT -> .env DEFAULT
     target_model = request.model or getattr(settings, "CHAT_MODEL", None) or settings.DEFAULT_MODEL
 
     if not target_model:
         raise HTTPException(503, "No model specified and no default configured.")
 
-    # ── 2. Validation ────────────────────────────────────────────────────────
+    # ── 2. Resolve Max Tokens (THE FIX) ──────────────────────────────────────
+    # Priority: 
+    # 1. Request (if frontend sends specific limit)
+    # 2. .env MAX_TOKENS (e.g., 32768)
+    # 3. Hard Fallback (2048) if nothing else is found
+    # settings now loads from .env via absolute path in config.py
+    final_max_tokens   = request.max_tokens   if request.max_tokens   is not None else settings.MAX_TOKENS
+    final_temperature  = request.temperature  if request.temperature  is not None else settings.TEMPERATURE
+    final_top_p        = request.top_p        if request.top_p        is not None else settings.TOP_P
+
+    # ── 3. Validation ────────────────────────────────────────────────────────
     model_path = Path(settings.MODELS_DIR) / target_model
     if not model_path.exists():
-        raise HTTPException(
-            status_code=404, 
-            detail=f"Model '{target_model}' not found on server."
-        )
+        raise HTTPException(status_code=404, detail=f"Model '{target_model}' not found.")
 
-    # ── 3. Lazy Load (The VRAM Swap) ─────────────────────────────────────────
-    # If the requested model is different from what is loaded, swap it.
+    # ── 4. Lazy Load (The VRAM Swap) ─────────────────────────────────────────
     if model_manager.current_model_name != target_model:
         print(f"\n[System] Switching model to: '{target_model}'...")
         try:
@@ -112,16 +116,14 @@ async def chat_completions(request: ChatCompletionRequest):
             logger.error(f"Failed to load model {target_model}: {e}")
             raise HTTPException(500, f"Failed to load model: {str(e)}")
 
-    # ── 4. Prepare Stop Sequences ────────────────────────────────────────────
-    # FIX: This was missing/misplaced in previous versions
+    # ── 5. Prepare Stop Sequences ────────────────────────────────────────────
     stop_sequences = []
     if request.stop:
         stop_sequences = [request.stop] if isinstance(request.stop, str) else request.stop
 
-    # ── 5. Streaming Response ────────────────────────────────────────────────
+    # ── 6. Streaming Response ────────────────────────────────────────────────
     if request.stream:
         async def event_generator():
-            # Stats tracking
             t0 = time.perf_counter()
             first_token_time = None
             n_gen = 0
@@ -132,30 +134,25 @@ async def chat_completions(request: ChatCompletionRequest):
             # Console Header
             print("\n")
             header(f"Generating ({target_model})")
-            row("Max tokens:", request.max_tokens)
-            row("Temp / Top-P:", f"{request.temperature} / {request.top_p}")
+            row("Max tokens:", final_max_tokens)  # <--- Should now show 32768
+            row("Temp / Top-P:", f"{final_temperature} / {final_top_p}")
             sep("-")
             print("Output:", end=" ", flush=True)
 
             try:
-                # Pass stop_sequences clearly here
                 async for token in model_manager.generate_stream(
                     messages=request.messages,
-                    max_tokens=request.max_tokens,
-                    temperature=request.temperature,
-                    top_p=request.top_p,
+                    max_tokens=final_max_tokens, # <--- Passing 32768 to llama_cpp
+                    temperature=final_temperature,
+                    top_p=final_top_p,
                     stop=stop_sequences,
                 ):
                     now = time.perf_counter()
-                    if first_token_time is None:
-                        first_token_time = now
-                    
+                    if first_token_time is None: first_token_time = now
                     n_gen += 1
                     
-                    # Terminal Stream
                     print(token, end="", flush=True)
 
-                    # Frontend Stream (SSE)
                     chunk_data = {
                         "id": f"chatcmpl-{int(time.time())}",
                         "object": "chat.completion.chunk",
@@ -201,14 +198,14 @@ async def chat_completions(request: ChatCompletionRequest):
             }
         )
 
-    # ── 6. Non-Streaming Fallback ────────────────────────────────────────────
+    # ── 7. Non-Streaming Fallback ────────────────────────────────────────────
     else:
         full_content = ""
         async for token in model_manager.generate_stream(
             messages=request.messages,
-            max_tokens=request.max_tokens,
-            temperature=request.temperature,
-            top_p=request.top_p,
+            max_tokens=final_max_tokens,
+            temperature=final_temperature,
+            top_p=final_top_p,
             stop=stop_sequences,
         ):
             full_content += token

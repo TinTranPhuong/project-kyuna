@@ -18,11 +18,13 @@ class ModelCard(BaseModel):
     owned_by: str = "user"
     type: str
     
-    # Required for UI
+    # Backend Fields
     file_size_gb: Optional[float] = None
+    is_loaded: bool = False
+    
+    # Frontend Compatibility Fields
     size: str              # e.g. "8.0 GB"
     context_window: int    # e.g. 32
-    is_loaded: bool = False
 
 class ModelsResponse(BaseModel):
     object: str = "list"
@@ -46,7 +48,6 @@ async def list_models():
             continue
 
         # 1. Improved Type Detection
-        # Only flag as 'vision' if it explicitly says 'vl', 'vision', or 'llava'
         name_lower = f.name.lower()
         vision_keywords = ["llava", "vision", "moondream", "-vl-", "vl_"]
         model_type = "vision" if any(k in name_lower for k in vision_keywords) else "text"
