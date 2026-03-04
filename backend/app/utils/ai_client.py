@@ -28,7 +28,7 @@ class AIServerClient:
         self,
         messages: list[dict],
         model: str,
-        max_tokens: int = 2048,
+        max_tokens: int | None = None,  # None = let AI server use its .env MAX_TOKENS
         temperature: float = 0.7,
     ) -> AsyncGenerator[str, None]:
         """
@@ -39,9 +39,12 @@ class AIServerClient:
             "model": model,
             "messages": messages,
             "stream": True,
-            "max_tokens": max_tokens,
             "temperature": temperature
         }
+        # Only set max_tokens if explicitly passed — otherwise let AI server
+        # use its own .env MAX_TOKENS setting (avoids hardcoded 2048 override)
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
         
         async with self.client.stream("POST", "/v1/chat/completions", json=payload) as response:
             response.raise_for_status()

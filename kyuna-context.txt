@@ -10139,123 +10139,6 @@ export default function RegisterPage() {
 }
 </file>
 
-<file path="frontend/src/services/chat.service.ts">
-import axiosInstance from '@/lib/axios'
-import { useAuthStore } from '@/store/authStore'
-import type {
-  Conversation,
-  ConversationWithMessages,
-  ModelInfo,
-  Message,
-} from '@/types/chat.types'
-
-export type { Conversation, ConversationWithMessages, ModelInfo, Message }
-
-export const chatService = {
-
-  // ─── Conversations ──────────────────────────────────────────────────────────
-
-  getConversations: async (skip = 0, limit = 20): Promise<Conversation[]> => {
-    const response = await axiosInstance.get<Conversation[]>(
-      '/api/v1/chat/conversations',
-      { params: { skip, limit } },
-    )
-    return response.data
-  },
-
-  getConversation: async (id: string): Promise<ConversationWithMessages> => {
-    const response = await axiosInstance.get<ConversationWithMessages>(
-      `/api/v1/chat/conversations/${id}`,
-    )
-    return response.data
-  },
-
-  createConversation: async (): Promise<Conversation> => {
-    const response = await axiosInstance.post<Conversation>('/api/v1/chat/conversations')
-    return response.data
-  },
-
-  deleteConversation: async (id: string): Promise<void> => {
-    await axiosInstance.delete(`/api/v1/chat/conversations/${id}`)
-  },
-
-  // NEW: Update conversation title
-  updateConversationTitle: async (id: string, title: string): Promise<Conversation> => {
-    const response = await axiosInstance.patch<Conversation>(`/api/v1/chat/conversations/${id}`, { title })
-    return response.data
-  },
-
-  // ─── Models ─────────────────────────────────────────────────────────────────
-
-  getModels: async (): Promise<ModelInfo[]> => {
-    const response = await axiosInstance.get<ModelInfo[]>('/api/v1/chat/models')
-    return response.data
-  },
-
-  // ─── Streaming ──────────────────────────────────────────────────────────────
-
-  sendMessageStream: async function* (
-    conversationId: string,
-    content: string,
-    model: string,
-    signal?: AbortSignal,
-  ): AsyncGenerator<string, void, unknown> {
-    const token   = useAuthStore.getState().token
-    const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-
-    const response = await fetch(
-      `${baseUrl}/api/v1/chat/conversations/${conversationId}/messages`,
-      {
-        method: 'POST',
-        signal,
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ content, model }),
-      },
-    )
-
-    if (!response.ok) {
-      throw new Error(`Chat stream failed: ${response.status} ${response.statusText}`)
-    }
-
-    if (!response.body) {
-      throw new Error('Response body is null — streaming is not supported in this environment')
-    }
-
-    const reader  = response.body.getReader()
-    const decoder = new TextDecoder()
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        const chunk = decoder.decode(value, { stream: true })
-        const lines = chunk.split('\n')
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue
-
-          const data = line.slice(6).trim()
-          if (data === '[DONE]') return
-
-          try {
-            const parsed = JSON.parse(data) as { token?: string }
-            if (parsed.token) yield parsed.token
-          } catch {
-            // Skip malformed JSON
-          }
-        }
-      }
-    } finally {
-      reader.releaseLock()
-    }
-  },
-}
-</file>
-
 <file path="frontend/src/services/translator.service.ts">
 import axiosInstance from '@/lib/axios'
 import type {
@@ -10782,256 +10665,6 @@ export interface ModelInfo {
   size?: string; 
   context_window?: number;
 }
-</file>
-
-<file path="ai_server/app/core/config.py">
-from pydantic_settings import BaseSettings, SettingsConfigDict
-
-class AISettings(BaseSettings):
-    DEFAULT_MODEL: str = ""                # filename of model in MODELS_DIR
-    TRANSLATION_MODEL: str = ""
-    DETECTOR_MODEL: str = ""
-    CHAT_MODEL: str = ""
-    VISION_MODEL: str = ""                 # filename of Vision GGUF in MODELS_DIR, e.g. "Qwen3VL-8B-Instruct-Q8_0.gguf"
-    MMPROJ_FILE: str  = ""                 # filename of CLIP projector, e.g. "mmproj-Qwen3VL-8B-Instruct-F16.gguf"
-    MODELS_DIR: str = "./models"
-    MIN_CONFIDENCE: float = 0
-    N_GPU_LAYERS: int = -1                 # -1 = all on GPU
-    N_CTX: int = 4096                      # context window (can be overridden to 30000 via .env)
-    N_THREADS: int = 8                     # CPU threads
-    MAX_CONCURRENT_REQUESTS: int = 3
-    PORT: int = 8001
-    
-    # Tell Pydantic to ignore the extra variables in your .env file
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
-
-settings = AISettings()
-</file>
-
-<file path="ai_server/app/routers/chat.py">
-import json
-import logging
-import time
-import math
-from typing import List, Dict, Optional, Any, Union
-from pathlib import Path
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-
-from app.services.model_manager import model_manager
-from app.core.config import settings
-
-router = APIRouter()
-logger = logging.getLogger(__name__)
-
-# ══════════════════════════════════════════════════════════════════════════
-#  TERMINAL VISUALIZATION HELPERS
-# ══════════════════════════════════════════════════════════════════════════
-W = 66
-def sep(c="="): print(c * W)
-def header(t):  sep(); print(f"  {t}"); sep()
-def row(l, v):  print(f"  {l:<34} {v}")
-
-def print_generation_stats(stats: dict):
-    print("\n")
-    header("Performance Report")
-    row("Model:",               f"{stats['model']}")
-    row("Prompt tokens:",       f"~{stats['n_prompt']} (est)")
-    row("Generated tokens:",    f"{stats['n_gen']}")
-    sep("-")
-    row("Time to first token:", f"{stats['ttft_ms']:.1f} ms")
-    row("Generation time:",     f"{stats['gen_time_s']:.2f} s")
-    row("Total time:",          f"{stats['total_time_s']:.2f} s")
-    sep("-")
-    row("Tokens / second:",     f"{stats['tps']:.2f} tok/s")
-    row("ms / token:",          f"{stats['mpt']:.2f} ms/tok")
-    
-    # Check Hardware Stats
-    if model_manager._model:
-        try:
-            llm = model_manager._model
-            vram_mb = model_manager.get_vram_usage()
-            
-            if vram_mb:
-                sep("-")
-                row("VRAM Usage:", f"{vram_mb} MB")
-
-            # Layer Split Check
-            total_layers = 0
-            if hasattr(llm, "metadata") and llm.metadata:
-                for key in ["general.block_count", "llm.layer_count"]:
-                    if key in llm.metadata:
-                        total_layers = int(llm.metadata[key])
-                        break
-            
-            if total_layers > 0:
-                n_gpu = llm.n_gpu_layers
-                n_gpu_visual = min(n_gpu, total_layers)
-                n_ram = max(0, total_layers - n_gpu)
-                
-                status = "(ALL GPU - FAST)" if n_ram == 0 else "(SPLIT - SLOWER)"
-                row("Layers on GPU:", f"{n_gpu_visual} / {total_layers}  {status}")
-                if n_ram > 0:
-                    row("Layers on CPU:",  f"{n_ram} / {total_layers}")
-        except Exception:
-            pass
-    sep()
-    print("\n")
-
-# ══════════════════════════════════════════════════════════════════════════
-#  SCHEMAS
-# ══════════════════════════════════════════════════════════════════════════
-class ChatCompletionRequest(BaseModel):
-    model: Optional[str] = None
-    messages: List[Dict[str, Any]]
-    stream: bool = True
-    max_tokens: Optional[int] = 2048
-    temperature: Optional[float] = 0.7
-    top_p: Optional[float] = 0.95
-    stop: Optional[Union[str, List[str]]] = None
-
-@router.post("/chat/completions")
-async def chat_completions(request: ChatCompletionRequest):
-    """
-    OpenAI-compatible chat completion endpoint.
-    Dynamically loads the requested model from the filesystem.
-    """
-    
-    # ── 1. Determine Target Model ────────────────────────────────────────────
-    # Priority: Request -> .env CHAT -> .env DEFAULT
-    target_model = request.model or getattr(settings, "CHAT_MODEL", None) or settings.DEFAULT_MODEL
-
-    if not target_model:
-        raise HTTPException(503, "No model specified and no default configured.")
-
-    # ── 2. Validation ────────────────────────────────────────────────────────
-    model_path = Path(settings.MODELS_DIR) / target_model
-    if not model_path.exists():
-        raise HTTPException(
-            status_code=404, 
-            detail=f"Model '{target_model}' not found on server."
-        )
-
-    # ── 3. Lazy Load (The VRAM Swap) ─────────────────────────────────────────
-    # If the requested model is different from what is loaded, swap it.
-    if model_manager.current_model_name != target_model:
-        print(f"\n[System] Switching model to: '{target_model}'...")
-        try:
-            await model_manager.load_model(target_model)
-        except Exception as e:
-            logger.error(f"Failed to load model {target_model}: {e}")
-            raise HTTPException(500, f"Failed to load model: {str(e)}")
-
-    # ── 4. Prepare Stop Sequences ────────────────────────────────────────────
-    # FIX: This was missing/misplaced in previous versions
-    stop_sequences = []
-    if request.stop:
-        stop_sequences = [request.stop] if isinstance(request.stop, str) else request.stop
-
-    # ── 5. Streaming Response ────────────────────────────────────────────────
-    if request.stream:
-        async def event_generator():
-            # Stats tracking
-            t0 = time.perf_counter()
-            first_token_time = None
-            n_gen = 0
-            
-            prompt_text = " ".join([m.get("content", "") for m in request.messages])
-            n_prompt_est = len(prompt_text) // 3
-
-            # Console Header
-            print("\n")
-            header(f"Generating ({target_model})")
-            row("Max tokens:", request.max_tokens)
-            row("Temp / Top-P:", f"{request.temperature} / {request.top_p}")
-            sep("-")
-            print("Output:", end=" ", flush=True)
-
-            try:
-                # Pass stop_sequences clearly here
-                async for token in model_manager.generate_stream(
-                    messages=request.messages,
-                    max_tokens=request.max_tokens,
-                    temperature=request.temperature,
-                    top_p=request.top_p,
-                    stop=stop_sequences,
-                ):
-                    now = time.perf_counter()
-                    if first_token_time is None:
-                        first_token_time = now
-                    
-                    n_gen += 1
-                    
-                    # Terminal Stream
-                    print(token, end="", flush=True)
-
-                    # Frontend Stream (SSE)
-                    chunk_data = {
-                        "id": f"chatcmpl-{int(time.time())}",
-                        "object": "chat.completion.chunk",
-                        "created": int(time.time()),
-                        "model": target_model,
-                        "choices": [{"index": 0, "delta": {"content": token}, "finish_reason": None}]
-                    }
-                    yield f"data: {json.dumps(chunk_data)}\n\n"
-                
-                # Stats calculation
-                t_end = time.perf_counter()
-                ttft = (first_token_time - t0) if first_token_time else 0
-                gen_time = (t_end - first_token_time) if first_token_time else 0
-                total_time = t_end - t0
-                tps = n_gen / gen_time if gen_time > 0 else 0
-                mpt = (gen_time / n_gen * 1000) if n_gen > 0 else 0
-
-                stats = {
-                    "model": target_model,
-                    "n_prompt": n_prompt_est,
-                    "n_gen": n_gen,
-                    "ttft_ms": ttft * 1000,
-                    "gen_time_s": gen_time,
-                    "total_time_s": total_time,
-                    "tps": tps,
-                    "mpt": mpt
-                }
-                
-                print_generation_stats(stats)
-                yield "data: [DONE]\n\n"
-
-            except Exception as e:
-                logger.error(f"Streaming error: {e}")
-                yield f"data: {json.dumps({'error': str(e)})}\n\n"
-
-        return StreamingResponse(
-            event_generator(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            }
-        )
-
-    # ── 6. Non-Streaming Fallback ────────────────────────────────────────────
-    else:
-        full_content = ""
-        async for token in model_manager.generate_stream(
-            messages=request.messages,
-            max_tokens=request.max_tokens,
-            temperature=request.temperature,
-            top_p=request.top_p,
-            stop=stop_sequences,
-        ):
-            full_content += token
-        
-        return {
-            "id": f"chatcmpl-{int(time.time())}",
-            "object": "chat.completion",
-            "created": int(time.time()),
-            "model": target_model,
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": full_content}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-        }
 </file>
 
 <file path="backend/app/routers/translator.py">
@@ -13174,6 +12807,123 @@ export default function MainLayout() {
 }
 </file>
 
+<file path="frontend/src/services/chat.service.ts">
+import axiosInstance from '@/lib/axios'
+import { useAuthStore } from '@/store/authStore'
+import type {
+  Conversation,
+  ConversationWithMessages,
+  ModelInfo,
+  Message,
+} from '@/types/chat.types'
+
+export type { Conversation, ConversationWithMessages, ModelInfo, Message }
+
+export const chatService = {
+
+  // ─── Conversations ──────────────────────────────────────────────────────────
+
+  getConversations: async (skip = 0, limit = 20): Promise<Conversation[]> => {
+    const response = await axiosInstance.get<Conversation[]>(
+      '/api/v1/chat/conversations',
+      { params: { skip, limit } },
+    )
+    return response.data
+  },
+
+  getConversation: async (id: string): Promise<ConversationWithMessages> => {
+    const response = await axiosInstance.get<ConversationWithMessages>(
+      `/api/v1/chat/conversations/${id}`,
+    )
+    return response.data
+  },
+
+  createConversation: async (): Promise<Conversation> => {
+    const response = await axiosInstance.post<Conversation>('/api/v1/chat/conversations')
+    return response.data
+  },
+
+  deleteConversation: async (id: string): Promise<void> => {
+    await axiosInstance.delete(`/api/v1/chat/conversations/${id}`)
+  },
+
+  // NEW: Update conversation title
+  updateConversationTitle: async (id: string, title: string): Promise<Conversation> => {
+    const response = await axiosInstance.patch<Conversation>(`/api/v1/chat/conversations/${id}`, { title })
+    return response.data
+  },
+
+  // ─── Models ─────────────────────────────────────────────────────────────────
+
+  getModels: async (): Promise<ModelInfo[]> => {
+    const response = await axiosInstance.get<ModelInfo[]>('/api/v1/chat/models')
+    return response.data
+  },
+
+  // ─── Streaming ──────────────────────────────────────────────────────────────
+
+  sendMessageStream: async function* (
+    conversationId: string,
+    content: string,
+    model: string,
+    signal?: AbortSignal,
+  ): AsyncGenerator<string, void, unknown> {
+    const token   = useAuthStore.getState().token
+    const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+
+    const response = await fetch(
+      `${baseUrl}/api/v1/chat/conversations/${conversationId}/messages`,
+      {
+        method: 'POST',
+        signal,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ content, model_used: model }), 
+      },
+    )
+
+    if (!response.ok) {
+      throw new Error(`Chat stream failed: ${response.status} ${response.statusText}`)
+    }
+
+    if (!response.body) {
+      throw new Error('Response body is null — streaming is not supported in this environment')
+    }
+
+    const reader  = response.body.getReader()
+    const decoder = new TextDecoder()
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        const chunk = decoder.decode(value, { stream: true })
+        const lines = chunk.split('\n')
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+
+          const data = line.slice(6).trim()
+          if (data === '[DONE]') return
+
+          try {
+            const parsed = JSON.parse(data) as { token?: string }
+            if (parsed.token) yield parsed.token
+          } catch {
+            // Skip malformed JSON
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock()
+    }
+  },
+}
+</file>
+
 <file path="frontend/src/types/translator.types.ts">
 export type JobStatus = 'pending' | 'processing' | 'completed' | 'failed'
 export type PageStatus = 'pending' | 'processing' | 'done' | 'no_text' | 'failed'
@@ -13242,102 +12992,273 @@ export type PhaseEvent =
   | { waiting: true }
 </file>
 
-<file path="ai_server/app/routers/models.py">
-import os
-import time
+<file path="ai_server/app/core/config.py">
 from pathlib import Path
-from fastapi import APIRouter, BackgroundTasks
-from pydantic import BaseModel
-from typing import List, Optional
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.core.config import settings
+# Resolve .env relative to THIS file, not the working directory.
+# config.py is at: ai_server/app/core/config.py
+# .env is at:      ai_server/.env
+# So we go up 3 levels: core -> app -> ai_server
+_ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
+
+class AISettings(BaseSettings):
+    DEFAULT_MODEL: str = ""
+    CHAT_MODEL: str = ""
+    TRANSLATION_MODEL: str = ""
+    DETECTOR_MODEL: str = ""
+    VISION_MODEL: str = ""
+    MMPROJ_FILE: str = ""
+    MODELS_DIR: str = "./models"
+    MIN_CONFIDENCE: float = 0
+    N_GPU_LAYERS: int = -1
+    N_CTX: int = 4096
+    N_THREADS: int = 8
+    MAX_CONCURRENT_REQUESTS: int = 3
+    PORT: int = 8001
+
+    # Generation defaults — loaded from .env
+    MAX_TOKENS: int = 2048
+    TEMPERATURE: float = 0.7
+    TOP_P: float = 0.9
+    TOP_K: int = 40
+    REPEAT_PENALTY: float = 1.1
+    MAX_THINK_TOKENS: int = 24576
+
+    model_config = SettingsConfigDict(
+        env_file=str(_ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+settings = AISettings()
+
+# Debug: print on startup so you can confirm the path is correct
+print(f"[Config] Loading .env from: {_ENV_FILE}")
+print(f"[Config] MAX_TOKENS={settings.MAX_TOKENS}  N_CTX={settings.N_CTX}  CHAT_MODEL={settings.CHAT_MODEL}")
+</file>
+
+<file path="ai_server/app/routers/chat.py">
+import json
+import logging
+import time
+from typing import List, Dict, Optional, Any, Union
+from pathlib import Path
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+
 from app.services.model_manager import model_manager
+from app.core.config import settings
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
-class ModelCard(BaseModel):
-    id: str
-    name: str
-    object: str = "model"
-    created: int = int(time.time())
-    owned_by: str = "user"
-    type: str
+# ══════════════════════════════════════════════════════════════════════════
+#  TERMINAL VISUALIZATION HELPERS
+# ══════════════════════════════════════════════════════════════════════════
+W = 66
+def sep(c="="): print(c * W)
+def header(t):  sep(); print(f"  {t}"); sep()
+def row(l, v):  print(f"  {l:<34} {v}")
+
+def print_generation_stats(stats: dict):
+    print("\n")
+    header("Performance Report")
+    row("Model:",               f"{stats['model']}")
+    row("Prompt tokens:",       f"~{stats['n_prompt']} (est)")
+    row("Generated tokens:",    f"{stats['n_gen']}")
+    sep("-")
+    row("Time to first token:", f"{stats['ttft_ms']:.1f} ms")
+    row("Generation time:",     f"{stats['gen_time_s']:.2f} s")
+    row("Total time:",          f"{stats['total_time_s']:.2f} s")
+    sep("-")
+    row("Tokens / second:",     f"{stats['tps']:.2f} tok/s")
+    row("ms / token:",          f"{stats['mpt']:.2f} ms/tok")
     
-    # Required for UI
-    file_size_gb: Optional[float] = None
-    size: str              # e.g. "8.0 GB"
-    context_window: int    # e.g. 32
-    is_loaded: bool = False
+    # Check Hardware Stats
+    if model_manager._model:
+        try:
+            llm = model_manager._model
+            vram_mb = model_manager.get_vram_usage()
+            if vram_mb:
+                sep("-")
+                row("VRAM Usage:", f"{vram_mb} MB")
 
-class ModelsResponse(BaseModel):
-    object: str = "list"
-    data: List[ModelCard]
+            # Layer Split Check
+            total_layers = 0
+            if hasattr(llm, "metadata") and llm.metadata:
+                for key in ["general.block_count", "llm.layer_count"]:
+                    if key in llm.metadata:
+                        total_layers = int(llm.metadata[key])
+                        break
+            
+            if total_layers > 0:
+                n_gpu = llm.n_gpu_layers
+                n_gpu_visual = min(n_gpu, total_layers)
+                n_ram = max(0, total_layers - n_gpu)
+                status = "(ALL GPU - FAST)" if n_ram == 0 else "(SPLIT - SLOWER)"
+                row("Layers on GPU:", f"{n_gpu_visual} / {total_layers}  {status}")
+        except Exception:
+            pass
+    sep()
+    print("\n")
 
-@router.get("/models", response_model=ModelsResponse)
-async def list_models():
-    """
-    Returns models with correct metadata for the Frontend UI.
-    """
-    models_dir = Path(settings.MODELS_DIR)
+# ══════════════════════════════════════════════════════════════════════════
+#  SCHEMAS
+# ══════════════════════════════════════════════════════════════════════════
+class ChatCompletionRequest(BaseModel):
+    model: Optional[str] = None
+    messages: List[Dict[str, Any]]
+    stream: bool = True
     
-    if not models_dir.exists():
-        return ModelsResponse(data=[])
+    # ✅ FIX: Change default from 2048 to None
+    # This allows the .env setting (32768) to take over below.
+    max_tokens: Optional[int] = None 
+    
+    temperature: Optional[float] = None  # None = read from .env TEMPERATURE
+    top_p: Optional[float] = None          # None = read from .env TOP_P
+    stop: Optional[Union[str, List[str]]] = None
 
-    data = []
-    for f in models_dir.iterdir():
-        if not f.is_file() or not f.name.endswith(".gguf"):
-            continue
-        if f.name.lower().startswith("mmproj-"):
-            continue
+@router.post("/chat/completions")
+async def chat_completions(request: ChatCompletionRequest):
+    """
+    OpenAI-compatible chat completion endpoint.
+    Dynamically loads the requested model from the filesystem.
+    """
+    
+    # ── 1. Determine Target Model ────────────────────────────────────────────
+    target_model = request.model or getattr(settings, "CHAT_MODEL", None) or settings.DEFAULT_MODEL
 
-        # 1. Improved Type Detection
-        # Only flag as 'vision' if it explicitly says 'vl', 'vision', or 'llava'
-        name_lower = f.name.lower()
-        vision_keywords = ["llava", "vision", "moondream", "-vl-", "vl_"]
-        model_type = "vision" if any(k in name_lower for k in vision_keywords) else "text"
-        
-        # 2. Calculate Size
-        size_gb = f.stat().st_size / (1024 ** 3)
-        size_str = f"{size_gb:.1f} GB"
-        
-        # 3. Estimate Context Window
-        ctx = 32 # Default
-        if "128k" in name_lower: ctx = 128
-        elif "moondream" in name_lower: ctx = 2
-        elif "llama-3" in name_lower and "8b" in name_lower: ctx = 8
-        
-        # 4. Check Status
-        is_loaded = (
-            f.name == model_manager.current_model_name or 
-            f.name == model_manager.current_vision_model_name
+    if not target_model:
+        raise HTTPException(503, "No model specified and no default configured.")
+
+    # ── 2. Resolve Max Tokens (THE FIX) ──────────────────────────────────────
+    # Priority: 
+    # 1. Request (if frontend sends specific limit)
+    # 2. .env MAX_TOKENS (e.g., 32768)
+    # 3. Hard Fallback (2048) if nothing else is found
+    # settings now loads from .env via absolute path in config.py
+    final_max_tokens   = request.max_tokens   if request.max_tokens   is not None else settings.MAX_TOKENS
+    final_temperature  = request.temperature  if request.temperature  is not None else settings.TEMPERATURE
+    final_top_p        = request.top_p        if request.top_p        is not None else settings.TOP_P
+
+    # ── 3. Validation ────────────────────────────────────────────────────────
+    model_path = Path(settings.MODELS_DIR) / target_model
+    if not model_path.exists():
+        raise HTTPException(status_code=404, detail=f"Model '{target_model}' not found.")
+
+    # ── 4. Lazy Load (The VRAM Swap) ─────────────────────────────────────────
+    if model_manager.current_model_name != target_model:
+        print(f"\n[System] Switching model to: '{target_model}'...")
+        try:
+            await model_manager.load_model(target_model)
+        except Exception as e:
+            logger.error(f"Failed to load model {target_model}: {e}")
+            raise HTTPException(500, f"Failed to load model: {str(e)}")
+
+    # ── 5. Prepare Stop Sequences ────────────────────────────────────────────
+    stop_sequences = []
+    if request.stop:
+        stop_sequences = [request.stop] if isinstance(request.stop, str) else request.stop
+
+    # ── 6. Streaming Response ────────────────────────────────────────────────
+    if request.stream:
+        async def event_generator():
+            t0 = time.perf_counter()
+            first_token_time = None
+            n_gen = 0
+            
+            prompt_text = " ".join([m.get("content", "") for m in request.messages])
+            n_prompt_est = len(prompt_text) // 3
+
+            # Console Header
+            print("\n")
+            header(f"Generating ({target_model})")
+            row("Max tokens:", final_max_tokens)  # <--- Should now show 32768
+            row("Temp / Top-P:", f"{final_temperature} / {final_top_p}")
+            sep("-")
+            print("Output:", end=" ", flush=True)
+
+            try:
+                async for token in model_manager.generate_stream(
+                    messages=request.messages,
+                    max_tokens=final_max_tokens, # <--- Passing 32768 to llama_cpp
+                    temperature=final_temperature,
+                    top_p=final_top_p,
+                    stop=stop_sequences,
+                ):
+                    now = time.perf_counter()
+                    if first_token_time is None: first_token_time = now
+                    n_gen += 1
+                    
+                    print(token, end="", flush=True)
+
+                    chunk_data = {
+                        "id": f"chatcmpl-{int(time.time())}",
+                        "object": "chat.completion.chunk",
+                        "created": int(time.time()),
+                        "model": target_model,
+                        "choices": [{"index": 0, "delta": {"content": token}, "finish_reason": None}]
+                    }
+                    yield f"data: {json.dumps(chunk_data)}\n\n"
+                
+                # Stats calculation
+                t_end = time.perf_counter()
+                ttft = (first_token_time - t0) if first_token_time else 0
+                gen_time = (t_end - first_token_time) if first_token_time else 0
+                total_time = t_end - t0
+                tps = n_gen / gen_time if gen_time > 0 else 0
+                mpt = (gen_time / n_gen * 1000) if n_gen > 0 else 0
+
+                stats = {
+                    "model": target_model,
+                    "n_prompt": n_prompt_est,
+                    "n_gen": n_gen,
+                    "ttft_ms": ttft * 1000,
+                    "gen_time_s": gen_time,
+                    "total_time_s": total_time,
+                    "tps": tps,
+                    "mpt": mpt
+                }
+                
+                print_generation_stats(stats)
+                yield "data: [DONE]\n\n"
+
+            except Exception as e:
+                logger.error(f"Streaming error: {e}")
+                yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            }
         )
 
-        data.append(ModelCard(
-            id=f.name,
-            name=f.name.replace(".gguf", "").replace("-", " ").title(),
-            type=model_type,
-            file_size_gb=round(size_gb, 1),
-            size=size_str,
-            context_window=ctx,
-            is_loaded=is_loaded
-        ))
-    
-    # Sort: Loaded first
-    data.sort(key=lambda x: (not x.is_loaded, x.name))
-    
-    return ModelsResponse(data=data)
-
-@router.post("/models/{model_name}/load")
-async def load_model(model_name: str):
-    await model_manager.load_model(model_name)
-    return {"status": "loaded", "model": model_name}
-
-@router.post("/models/prewarm-vision")
-async def prewarm_vision_model(background_tasks: BackgroundTasks):
-    if not model_manager.is_vision_model_loaded and settings.VISION_MODEL:
-        background_tasks.add_task(model_manager.load_vision_model, settings.VISION_MODEL)
-        return {"status": "warming_up", "model": settings.VISION_MODEL}
-    return {"status": "already_hot"}
+    # ── 7. Non-Streaming Fallback ────────────────────────────────────────────
+    else:
+        full_content = ""
+        async for token in model_manager.generate_stream(
+            messages=request.messages,
+            max_tokens=final_max_tokens,
+            temperature=final_temperature,
+            top_p=final_top_p,
+            stop=stop_sequences,
+        ):
+            full_content += token
+        
+        return {
+            "id": f"chatcmpl-{int(time.time())}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": target_model,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": full_content}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        }
 </file>
 
 <file path="frontend/src/components/chat/ChatWindow.tsx">
@@ -14526,6 +14447,105 @@ export const useTranslatorStore = create<TranslatorState>((set, get) => ({
   setSourceLanguage: (lang) => set({ sourceLanguage: lang }),
   setTargetLanguage: (lang) => set({ targetLanguage: lang }),
 }))
+</file>
+
+<file path="ai_server/app/routers/models.py">
+import os
+import time
+from pathlib import Path
+from fastapi import APIRouter, BackgroundTasks
+from pydantic import BaseModel
+from typing import List, Optional
+
+from app.core.config import settings
+from app.services.model_manager import model_manager
+
+router = APIRouter()
+
+class ModelCard(BaseModel):
+    id: str
+    name: str
+    object: str = "model"
+    created: int = int(time.time())
+    owned_by: str = "user"
+    type: str
+    
+    # Backend Fields
+    file_size_gb: Optional[float] = None
+    is_loaded: bool = False
+    
+    # Frontend Compatibility Fields
+    size: str              # e.g. "8.0 GB"
+    context_window: int    # e.g. 32
+
+class ModelsResponse(BaseModel):
+    object: str = "list"
+    data: List[ModelCard]
+
+@router.get("/models", response_model=ModelsResponse)
+async def list_models():
+    """
+    Returns models with correct metadata for the Frontend UI.
+    """
+    models_dir = Path(settings.MODELS_DIR)
+    
+    if not models_dir.exists():
+        return ModelsResponse(data=[])
+
+    data = []
+    for f in models_dir.iterdir():
+        if not f.is_file() or not f.name.endswith(".gguf"):
+            continue
+        if f.name.lower().startswith("mmproj-"):
+            continue
+
+        # 1. Improved Type Detection
+        name_lower = f.name.lower()
+        vision_keywords = ["llava", "vision", "moondream", "-vl-", "vl_"]
+        model_type = "vision" if any(k in name_lower for k in vision_keywords) else "text"
+        
+        # 2. Calculate Size
+        size_gb = f.stat().st_size / (1024 ** 3)
+        size_str = f"{size_gb:.1f} GB"
+        
+        # 3. Estimate Context Window
+        ctx = 32 # Default
+        if "128k" in name_lower: ctx = 128
+        elif "moondream" in name_lower: ctx = 2
+        elif "llama-3" in name_lower and "8b" in name_lower: ctx = 8
+        
+        # 4. Check Status
+        is_loaded = (
+            f.name == model_manager.current_model_name or 
+            f.name == model_manager.current_vision_model_name
+        )
+
+        data.append(ModelCard(
+            id=f.name,
+            name=f.name.replace(".gguf", "").replace("-", " ").title(),
+            type=model_type,
+            file_size_gb=round(size_gb, 1),
+            size=size_str,
+            context_window=ctx,
+            is_loaded=is_loaded
+        ))
+    
+    # Sort: Loaded first
+    data.sort(key=lambda x: (not x.is_loaded, x.name))
+    
+    return ModelsResponse(data=data)
+
+@router.post("/models/{model_name}/load")
+async def load_model(model_name: str):
+    await model_manager.load_model(model_name)
+    return {"status": "loaded", "model": model_name}
+
+@router.post("/models/prewarm-vision")
+async def prewarm_vision_model(background_tasks: BackgroundTasks):
+    if not model_manager.is_vision_model_loaded and settings.VISION_MODEL:
+        background_tasks.add_task(model_manager.load_vision_model, settings.VISION_MODEL)
+        return {"status": "warming_up", "model": settings.VISION_MODEL}
+    return {"status": "already_hot"}
 </file>
 
 <file path="frontend/src/pages/TranslatorPage.tsx">
