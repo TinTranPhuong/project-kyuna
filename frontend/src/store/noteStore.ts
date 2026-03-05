@@ -14,11 +14,9 @@ interface NoteStore {
   isLoading: boolean
 
   loadNotes: () => Promise<void>
-
   setManagerOpen: (isOpen: boolean) => void
   openNote: (id: string) => void
   closeNote: (id: string) => void
-
   addNote: () => Promise<void>
   updateNote: (id: string, text: string) => Promise<void>
   updateNoteTitle: (id: string, title: string) => Promise<void>
@@ -34,75 +32,62 @@ export const useNoteStore = create<NoteStore>((set) => ({
     set({ isLoading: true })
     try {
       const remote = await notesService.getAll()
-      set({
-        notes: remote.map(n => ({ ...n, isOpen: false })),
-        isLoading: false,
-      })
+      set({ notes: remote.map(n => ({ ...n, isOpen: false })), isLoading: false })
+      console.log(`[noteStore] Loaded ${remote.length} notes from backend ✓`)
     } catch (err) {
-      console.error('Failed to load notes:', err)
+      console.error('[noteStore] loadNotes FAILED — notes table may not exist. Run SQL migration!', err)
       set({ isLoading: false })
     }
   },
 
   setManagerOpen: (isOpen) => set({ isManagerOpen: isOpen }),
 
-  openNote: (id) => set(state => ({
-    notes: state.notes.map(n => n.id === id ? { ...n, isOpen: true } : n),
-  })),
-
-  closeNote: (id) => set(state => ({
-    notes: state.notes.map(n => n.id === id ? { ...n, isOpen: false } : n),
-  })),
+  openNote:  (id) => set(state => ({ notes: state.notes.map(n => n.id === id ? { ...n, isOpen: true }  : n) })),
+  closeNote: (id) => set(state => ({ notes: state.notes.map(n => n.id === id ? { ...n, isOpen: false } : n) })),
 
   addNote: async () => {
-    // Show the notepad instantly with a temp ID — don't wait for the API
+    // Optimistic: show notepad immediately with temp ID
     const tempId = `temp-${Date.now()}`
     set(state => ({
       notes: [{ id: tempId, title: 'NOTE', text: '', isOpen: true }, ...state.notes],
     }))
     try {
       const created = await notesService.create({ title: 'NOTE', text: '' })
-      // Swap the temp ID for the real DB UUID
+      // Swap temp ID for the real DB UUID
       set(state => ({
         notes: state.notes.map(n => n.id === tempId ? { ...created, isOpen: true } : n),
       }))
     } catch (err) {
-      console.error('Failed to save note to backend:', err)
-      // Remove the optimistic note so state stays consistent
+      console.error('[noteStore] addNote FAILED — notes table may not exist. Run SQL migration!', err)
+      // Roll back optimistic note
       set(state => ({ notes: state.notes.filter(n => n.id !== tempId) }))
     }
   },
 
   updateNote: async (id, text) => {
-    set(state => ({
-      notes: state.notes.map(n => n.id === id ? { ...n, text } : n),
-    }))
+    set(state => ({ notes: state.notes.map(n => n.id === id ? { ...n, text } : n) }))
     try {
       await notesService.update(id, { text })
     } catch (err) {
-      console.error('Failed to update note text:', err)
+      console.error('[noteStore] updateNote FAILED:', err)
     }
   },
 
   updateNoteTitle: async (id, title) => {
-    set(state => ({
-      notes: state.notes.map(n => n.id === id ? { ...n, title } : n),
-    }))
+    set(state => ({ notes: state.notes.map(n => n.id === id ? { ...n, title } : n) }))
     try {
       await notesService.update(id, { title })
     } catch (err) {
-      console.error('Failed to update note title:', err)
+      console.error('[noteStore] updateNoteTitle FAILED:', err)
     }
   },
 
   removeNote: async (id) => {
-    set(state => ({
-      notes: state.notes.filter(n => n.id !== id),
-    }))
+    set(state => ({ notes: state.notes.filter(n => n.id !== id) }))
     try {
       await notesService.delete(id)
     } catch (err) {
-      console.error('Failed to delete note:', err)
+      console.error('[noteStore] removeNote FAILED:', err)
     }
   },
 }))

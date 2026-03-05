@@ -3,7 +3,7 @@ import { NavLink } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   Home, MessageSquare, Languages, BarChart2,
-  StickyNote, type LucideIcon,
+  StickyNote, Wrench, type LucideIcon, // <-- ADDED Wrench here
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import Tooltip from '@/components/ui/Tooltip';
@@ -16,10 +16,13 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { icon: Home,         label: 'Home Page',     path: '/'          },
+  { icon: Home,         label: 'Home Page', path: '/'          },
   { icon: MessageSquare,label: 'Chat',      path: '/chat'      },
-  { icon: Languages,    label: 'Translate', path: '/translate' },
   { icon: BarChart2,    label: 'Dashboard', path: '/dashboard' },
+  { icon: Wrench,       label: 'Tools',     path: '/tools'     }, // <-- ADDED Tools
+
+  // --- PRESERVED OLD CODE ---
+  // { icon: Languages,    label: 'Translate', path: '/translate' },
 ];
 
 export const Sidebar = () => {
@@ -48,8 +51,8 @@ export const Sidebar = () => {
             <SidebarLink key={item.path} item={item} isExpanded={isExpanded} />
           ))}
 
-          {/* Notes Button (Moved up directly under the map loop) */}
-          <Tooltip content="Notes" position="right" className={isExpanded ? 'hidden' : ''}>
+          {/* --- PRESERVED OLD CODE (Notes Button moved to Tools Page) --- */}
+          {/* <Tooltip content="Notes" position="right" className={isExpanded ? 'hidden' : ''}>
             <button
               onClick={() => setManagerOpen(true)}
               className={cn(
@@ -66,6 +69,7 @@ export const Sidebar = () => {
               )}
             </button>
           </Tooltip>
+          */}
 
         </nav>
       </div>

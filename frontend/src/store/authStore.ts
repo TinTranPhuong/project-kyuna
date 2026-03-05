@@ -12,7 +12,7 @@ interface AuthState {
   token: string | null
   refreshToken: string | null
   isLoggedIn: boolean
-  isInitialized: boolean
+  isInitialized: boolean  // true once initialize() has completed (success OR failure)
 
   initialize: () => Promise<void>
   login: (user: User, token: string, refreshToken: string) => void
@@ -21,10 +21,21 @@ interface AuthState {
   updateToken: (token: string) => void
 }
 
-/** After a successful auth check, pull user data from PostgreSQL. */
+/** Pull fresh settings + notes from PostgreSQL after login / page reload. */
 async function hydrateUserData() {
   await useSettingsStore.getState().syncFromBackend()
   await useNoteStore.getState().loadNotes()
+}
+
+/**
+ * Wipe all user-specific data from every store on logout.
+ * This prevents stale data from one user leaking into a subsequent session.
+ */
+function clearUserData() {
+  useSettingsStore.getState().resetToDefaults()
+  useNoteStore.setState({ notes: [], isManagerOpen: false, isLoading: false })
+  // Remove the persisted settings cache so the next user gets a clean slate.
+  localStorage.removeItem('kyuna-settings-storage')
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -36,46 +47,64 @@ export const useAuthStore = create<AuthState>()(
       isLoggedIn: false,
       isInitialized: false,
 
+      // ── Called ONCE on App mount (via useEffect in App.tsx) ──────────────────
       initialize: async () => {
         const { token } = get()
+
+        // No stored token → nothing to validate. Mark as done immediately.
         if (!token) {
           set({ isInitialized: true, isLoggedIn: false })
           return
         }
+
         try {
+          // Validate the stored token against the backend.
           const userData = await authService.getMe()
           set({ user: userData, isLoggedIn: true })
-          // Hydrate settings + notes from PostgreSQL
+
+          // Token is valid → hydrate notes + settings from PostgreSQL.
           await hydrateUserData()
         } catch {
+          // Token expired or revoked → clear everything.
           set({ user: null, token: null, refreshToken: null, isLoggedIn: false })
+          clearUserData()
         } finally {
+          // Always mark as initialized so ProtectedRoute stops showing the spinner.
           set({ isInitialized: true })
         }
       },
 
+      // ── Called by LoginPage / RegisterPage after a successful auth response ──
       login: (user, token, refreshToken) => {
         set({ user, token, refreshToken, isLoggedIn: true, isInitialized: true })
-        // Hydrate settings + notes after login (fire-and-forget)
+        // Hydrate fresh data from PostgreSQL. Fire-and-forget — the UI will
+        // update reactively when the Zustand state changes.
         void hydrateUserData()
       },
 
+      // ── Called from the logout button ────────────────────────────────────────
       logout: async () => {
         try {
           await authService.logout()
         } catch {
-          console.warn('Backend logout failed; clearing local state anyway.')
+          console.warn('[authStore] Backend logout call failed — clearing local state anyway.')
         } finally {
+          // 1. Clear auth tokens so axios stops sending them.
           set({ user: null, token: null, refreshToken: null, isLoggedIn: false })
+          // 2. Wipe all user-specific store data.
+          clearUserData()
         }
       },
 
-      setUser: (user) => set({ user }),
+      setUser:     (user)  => set({ user }),
       updateToken: (token) => set({ token }),
     }),
     {
       name: 'kyuna-auth-storage',
       storage: createJSONStorage(() => localStorage),
+      // Only persist auth tokens + login state.
+      // isInitialized is intentionally NOT persisted — it must default to false
+      // on every page load so App.tsx triggers initialize() fresh each time.
       partialize: (state) => ({
         user:         state.user,
         token:        state.token,
