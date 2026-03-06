@@ -2,12 +2,11 @@ import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
-  Home, MessageSquare, Languages, BarChart2,
-  StickyNote, Wrench, type LucideIcon, // <-- ADDED Wrench here
+  Home, MessageSquare, BarChart2, Brain, Wrench, type LucideIcon, 
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import Tooltip from '@/components/ui/Tooltip';
-import { useNoteStore } from '@/store/noteStore';
+//import { useNoteStore } from '@/store/noteStore';
 
 interface NavItem {
   icon: LucideIcon;
@@ -19,15 +18,16 @@ const NAV_ITEMS: NavItem[] = [
   { icon: Home,         label: 'Home Page', path: '/'          },
   { icon: MessageSquare,label: 'Chat',      path: '/chat'      },
   { icon: BarChart2,    label: 'Dashboard', path: '/dashboard' },
-  { icon: Wrench,       label: 'Tools',     path: '/tools'     }, // <-- ADDED Tools
+  { icon: Wrench,       label: 'Tools',     path: '/tools'     }, 
+  { icon: Brain,        label: 'Memory',    path: '/memory'    },
 
   // --- PRESERVED OLD CODE ---
-  // { icon: Languages,    label: 'Translate', path: '/translate' },
+  //{ icon: Languages,    label: 'Translate', path: '/translate' },
 ];
 
 export const Sidebar = () => {
   const [isHovered, setIsHovered] = useState(false);
-  const setManagerOpen = useNoteStore(state => state.setManagerOpen);
+  // const setManagerOpen = useNoteStore(state => state.setManagerOpen);
   const isExpanded = isHovered; 
 
   return (

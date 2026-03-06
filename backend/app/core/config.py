@@ -35,6 +35,16 @@ class Settings(BaseSettings):
     # ── App ───────────────────────────────────────────────────────────────────
     ENVIRONMENT: str = "development"
 
+    # ── DB ────────────────────────────────────────────────────────────────────
+    QDRANT_URL: str = "http://localhost:6333"
+    QDRANT_API_KEY: str = ""
+    EXTRACTION_ENABLED: bool = True
+    EXTRACTION_MIN_WORDS: int = 20
+    EXTRACTION_EVERY_N_TURNS: int = 3
+    DOCS_UPLOAD_DIR: str = "D:\\project-kyuna\\uploads\\docs"
+    MAX_DOC_SIZE_MB: int = 50
+    EMBEDDING_DIMENSIONS: int = 768
+
     @field_validator("ALLOWED_ORIGINS", mode="before")
     @classmethod
     def assemble_cors_origins(cls, v: Union[str, List[str]]) -> List[str]:

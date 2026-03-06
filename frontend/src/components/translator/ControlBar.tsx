@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslatorStore } from '@/store/translatorStore';
-import { ChevronLeft, ChevronRight, Eye, EyeOff } from 'lucide-react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import type { OverlayMode } from '@/types/translator.types';
 
 export const ControlBar = () => {

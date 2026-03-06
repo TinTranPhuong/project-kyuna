@@ -14,6 +14,7 @@ interface ChatState {
   currentStreamContent: string
   selectedModel: string
   _abortController: AbortController | null
+  lastMemoryContext: { memories: number; chunks: number; universals: number } | null
 
   loadConversations: () => Promise<void>
   selectConversation: (id: string) => Promise<void>
@@ -21,10 +22,11 @@ interface ChatState {
   deleteConversation: (id: string) => Promise<void>
   updateConversationTitle: (id: string, title: string) => Promise<void>
   sendMessage: (content: string) => Promise<void>
-  stopGeneration: () => void // <-- NEW: Added to interface
+  stopGeneration: () => void
   setModel: (model: string) => void
   appendStreamToken: (token: string) => void
   finalizeStream: (fullContent: string) => void
+  setMemoryContext: (ctx: { memories: number; chunks: number; universals: number }) => void
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -35,6 +37,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
   currentStreamContent: '',
   selectedModel: useSettingsStore.getState().chatModel ?? 'llama-3.1-8b-instruct-q4_k_m.gguf',
   _abortController: null,
+  lastMemoryContext: null,
+
+  setMemoryContext: (ctx) => set({ lastMemoryContext: ctx }),
 
   loadConversations: async () => {
     try {
@@ -46,7 +51,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   selectConversation: async (id) => {
-    set({ activeConversationId: id, currentStreamContent: '' })
+    set({ activeConversationId: id, currentStreamContent: '', lastMemoryContext: null })
 
     if (!get().messages[id]) {
       try {
@@ -67,6 +72,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         conversations: [newConv, ...state.conversations],
         activeConversationId: newConv.id,
         messages: { ...state.messages, [newConv.id]: [] },
+        lastMemoryContext: null
       }))
       return newConv
     } catch (error) {
@@ -93,7 +99,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   updateConversationTitle: async (id, title) => {
-    // Optimistic UI update
     set(state => ({
       conversations: state.conversations.map(conv => 
         conv.id === id ? { ...conv, title } : conv
@@ -107,16 +112,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  // NEW: Action to manually stop generation from the UI
   stopGeneration: () => {
-    // FIX: Removed unused 'isStreaming' from destructuring
     const { _abortController } = get() 
     
     if (_abortController) {
-      _abortController.abort() // Cancel the HTTP request
+      _abortController.abort()
       console.log('Generation stopped by user')
     }
-    // Reset loading state immediately so UI shows "Stopped"
     set({ isStreaming: false, _abortController: null })
   },
 
@@ -124,7 +126,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const { activeConversationId, selectedModel, isStreaming, _abortController } = get()
     if (!activeConversationId) return
 
-    // Auto-abort if previous stream is still active
     if (isStreaming && _abortController) {
       _abortController.abort()
     }
@@ -156,7 +157,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       },
     }))
 
-    // Define fullContent outside try/catch so we can save partial text on abort
     let fullContent = ''
 
     try {
@@ -188,12 +188,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       get().finalizeStream(fullContent)
 
+      // Pick up memory_context that arrived during the stream
+      if (chatService._lastMemoryContext) {
+        set({ lastMemoryContext: chatService._lastMemoryContext })
+        chatService._lastMemoryContext = null
+      }
+
     } catch (error) {
-      // If user clicked Stop, we catch the AbortError here
       if (error instanceof Error && error.name === 'AbortError') {
-        // Optional: If you want to SAVE what was generated before stopping, 
-        // uncomment the line below:
-        // if (fullContent) get().finalizeStream(fullContent)
         return
       }
       

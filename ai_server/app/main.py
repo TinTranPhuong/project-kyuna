@@ -3,7 +3,7 @@ from fastapi import FastAPI
 
 from app.core.config import settings
 from app.services.model_manager import model_manager
-from app.routers import chat, models, translate
+from app.routers import chat, models, translate, embeddings, memory as memory_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -24,9 +24,11 @@ app = FastAPI(
 )
 
 # Include core routers
-app.include_router(chat.router, prefix="/v1", tags=["chat"])
-app.include_router(models.router, prefix="/v1", tags=["models"])
-app.include_router(translate.router, prefix="/v1", tags=["translate"])
+app.include_router(chat.router,          prefix="/v1", tags=["chat"])
+app.include_router(models.router,        prefix="/v1", tags=["models"])
+app.include_router(translate.router,     prefix="/v1", tags=["translate"])
+app.include_router(embeddings.router,    prefix="/v1", tags=["embeddings"])
+app.include_router(memory_router.router, prefix="/v1", tags=["memory"])
 
 @app.get("/v1/health", tags=["system"])
 async def health():

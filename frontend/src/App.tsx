@@ -23,6 +23,7 @@ import NotFoundPage from '@/pages/NotFoundPage';
 import ToolsPage from '@/pages/ToolsPage'; 
 import MusicPlayer from '@/components/music/MusicPlayer';
 import NotesPage from '@/pages/NotesPage';
+import MemoryPage from '@/pages/MemoryPage'
 
 export default function App() {
   const location = useLocation();
@@ -67,8 +68,9 @@ export default function App() {
               <Route path="/chat/:id"  element={<ChatbotPage />} />
               <Route path="/translate" element={<TranslatorPage />} />
               <Route path="/dashboard" element={<DashboardPage />} />
-              <Route path="/notes" element={<NotesPage />} />
+              <Route path="/notes"     element={<NotesPage />} />
               <Route path="/tools"     element={<ToolsPage />} />
+              <Route path="/memory"    element={<MemoryPage />} />
             </Route>
           </Route>
 

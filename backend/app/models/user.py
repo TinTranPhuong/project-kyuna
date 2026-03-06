@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from app.models.chat import ChatConversation
     from app.models.translator import TranslationJob
     from app.models.note import Note
-
+    from app.models.memory import MemoryFact, UniversalFact, Document
 
 class User(Base):
     __tablename__ = "users"
@@ -31,7 +31,7 @@ class User(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    # ── Relationships ─────────────────────────────────────────────────────────
+    # --- Relationships ---------------------------------------------------------
 
     settings: Mapped[Optional["UserSettings"]] = relationship(
         "UserSettings", back_populates="user", uselist=False, cascade="all, delete-orphan"
@@ -47,4 +47,15 @@ class User(Base):
     )
     notes: Mapped[List["Note"]] = relationship(
         "Note", back_populates="user", cascade="all, delete-orphan"
+    )
+    
+    # RAG & Memory System Relationships
+    memory_facts: Mapped[List["MemoryFact"]] = relationship(
+        "MemoryFact", back_populates="user", cascade="all, delete-orphan"
+    )
+    universal_facts: Mapped[List["UniversalFact"]] = relationship(
+        "UniversalFact", back_populates="user", cascade="all, delete-orphan"
+    )
+    documents: Mapped[List["Document"]] = relationship(
+        "Document", back_populates="user", cascade="all, delete-orphan"
     )

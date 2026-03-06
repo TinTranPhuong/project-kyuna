@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type UIEvent } from 'react';
-import { Bot, ArrowDown } from 'lucide-react';
+import { Bot, ArrowDown, Brain } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useChatStore } from '@/store/chatStore';
 import { ChatMessage } from './ChatMessage';
@@ -11,7 +11,8 @@ export const ChatWindow = () => {
     messages, 
     activeConversationId,
     isStreaming, 
-    currentStreamContent 
+    currentStreamContent,
+    lastMemoryContext 
   } = useChatStore();
   
   const currentMessages = activeConversationId ? messages[activeConversationId] || [] : [];
@@ -34,7 +35,6 @@ export const ChatWindow = () => {
     const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
     const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
     
-    // If user scrolls up more than 100px, show the button and disable auto-scroll
     if (distanceFromBottom > 100) {
       setShowScrollButton(true);
       isAutoScrollEnabled.current = false;
@@ -44,11 +44,6 @@ export const ChatWindow = () => {
     }
   };
 
-  /**
-   * Auto-scroll effect:
-   * Uses requestAnimationFrame to ensure the DOM has painted the new text before measuring height.
-   * Uses 'auto' (instant) for streaming to prevent stuttering, and 'smooth' for new messages.
-   */
   useEffect(() => {
     if (isAutoScrollEnabled.current) {
       requestAnimationFrame(() => {
@@ -57,7 +52,6 @@ export const ChatWindow = () => {
     }
   }, [currentMessages.length, currentStreamContent]);
 
-  // Always scroll to bottom when switching conversations
   useEffect(() => {
     scrollToBottom('auto');
   }, [activeConversationId]);
@@ -82,7 +76,6 @@ export const ChatWindow = () => {
   }
 
   return (
-    // Outer relative wrapper keeps the button anchored to the chat window
     <div className="relative flex-1 flex flex-col h-full overflow-hidden">
       
       {/* Scrollable message container */}
@@ -144,6 +137,17 @@ export const ChatWindow = () => {
           </motion.button>
         )}
       </AnimatePresence>
+
+      {/* Memory Indicator */}
+      {lastMemoryContext && !isStreaming && (lastMemoryContext.memories + lastMemoryContext.chunks + lastMemoryContext.universals > 0) && (
+        <div 
+          title={`${lastMemoryContext.memories} memories · ${lastMemoryContext.chunks} doc chunks · ${lastMemoryContext.universals} universal facts`}
+          className="absolute bottom-2 right-4 text-xs bg-black/40 backdrop-blur-sm border border-white/10 px-3 py-1.5 rounded-full cursor-default flex items-center gap-1.5 text-white/50 hover:text-white/80 transition-colors shadow-lg z-20"
+        >
+          <Brain size={14} />
+          <span>{lastMemoryContext.memories + lastMemoryContext.chunks + lastMemoryContext.universals} context used</span>
+        </div>
+      )}
 
     </div>
   );

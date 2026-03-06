@@ -1,5 +1,6 @@
 import json
 import shutil
+import logging
 from pathlib import Path
 
 from fastapi import HTTPException, status
@@ -12,6 +13,9 @@ from app.models.session import UserSettings
 from app.schemas.user import UpdateProfileRequest, ChangePasswordRequest, UpdateSettingsRequest
 from app.core.security import hash_password, verify_password
 from app.core.config import settings
+from app.services.qdrant_service import qdrant_service
+
+logger = logging.getLogger(__name__)
 
 
 async def update_user_profile(db: AsyncSession, current_user: User, data: UpdateProfileRequest) -> User:
@@ -37,11 +41,21 @@ async def delete_user_account(db: AsyncSession, user_id: str) -> None:
     stmt = select(User).where(User.id == user_id)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
+    
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        
     user_dir = Path(settings.UPLOAD_DIR) / str(user_id)
     if user_dir.exists() and user_dir.is_dir():
         shutil.rmtree(user_dir, ignore_errors=True)
+
+    # Clean all Qdrant vectors for this user
+    for collection in ["conversation_memories", "documents", "universal_facts"]:
+        success = await qdrant_service.delete_by_user(collection, user_id)
+        if not success:
+            logger.warning(f"[UserService] Qdrant cleanup may have failed for {collection}/{user_id}")
+    # Do not raise — PostgreSQL CASCADE already handled the relational cleanup
+
     await db.delete(user)
     await db.commit()
 
@@ -50,11 +64,13 @@ async def get_user_settings(db: AsyncSession, user_id: str) -> UserSettings:
     stmt = select(UserSettings).where(UserSettings.user_id == user_id)
     result = await db.execute(stmt)
     settings_obj = result.scalar_one_or_none()
+    
     if not settings_obj:
         settings_obj = UserSettings(user_id=user_id)
         db.add(settings_obj)
         await db.commit()
         await db.refresh(settings_obj)
+        
     return settings_obj
 
 

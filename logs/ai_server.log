@@ -1,0 +1,22 @@
+[Config] Loading .env from: D:\project-kyuna\ai_server\.env
+[Config] MAX_TOKENS=32768  N_CTX=32768  CHAT_MODEL=Qwen3.5-35B-A3B-UD-IQ3_S.gguf
+Server started. Models will be lazy-loaded on first request.
+INFO:     127.0.0.1:52357 - "POST /v1/embeddings HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52357 - "POST /v1/embeddings HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:57014 - "GET /v1/embeddings HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:57014 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+Shutdown: Unloading models and purging VRAM...
+[Config] Loading .env from: D:\project-kyuna\ai_server\.env
+[Config] MAX_TOKENS=32768  N_CTX=32768  CHAT_MODEL=Qwen3.5-35B-A3B-UD-IQ3_S.gguf
+Server started. Models will be lazy-loaded on first request.
+INFO:     127.0.0.1:57816 - "POST /v1/embeddings HTTP/1.1" 500 Internal Server Error
+Shutdown: Unloading models and purging VRAM...
+[Config] Loading .env from: D:\project-kyuna\ai_server\.env
+[Config] MAX_TOKENS=32768  N_CTX=32768  CHAT_MODEL=Qwen3.5-35B-A3B-UD-IQ3_S.gguf
+Server started. Models will be lazy-loaded on first request.
+INFO:     127.0.0.1:54586 - "POST /v1/embeddings HTTP/1.1" 200 OK
+Shutdown: Unloading models and purging VRAM...
+[Config] Loading .env from: D:\project-kyuna\ai_server\.env
+[Config] MAX_TOKENS=32768  N_CTX=32768  CHAT_MODEL=Qwen3.5-35B-A3B-UD-IQ3_S.gguf
+Server started. Models will be lazy-loaded on first request.
+INFO:     127.0.0.1:51345 - "POST /v1/memory/extract HTTP/1.1" 200 OK

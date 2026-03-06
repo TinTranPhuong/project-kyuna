@@ -1,0 +1,8 @@
+INFO:     127.0.0.1:50027 - "GET /api/v1/memory/facts HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:50027 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:50377 - "GET /api/v1/memory/facts HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:60047 - "GET /api/v1/memory/facts HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:54977 - "GET /docs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54977 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60590 - "GET /api/v1/memory/facts?limit=50&offset=0&min_confidence=0 HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:60590 - "GET /api/v1/memory/facts?limit=50&offset=0&min_confidence=0 HTTP/1.1" 401 Unauthorized

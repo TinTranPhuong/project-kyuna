@@ -33,7 +33,7 @@ const JobItem = ({ job, isActive, onClick, onRename, onDelete }: any) => {
 
   return (
     <div
-      onClick={(e) => {
+      onClick={() => {
         if (!isEditing) onClick();
       }}
       className={cn(

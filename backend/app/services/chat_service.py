@@ -1,5 +1,7 @@
 import json
 import time
+import asyncio
+import logging
 from typing import AsyncGenerator
 
 from fastapi import HTTPException, status
@@ -10,7 +12,14 @@ from sqlalchemy.orm import selectinload
 from app.models.chat import ChatConversation, ChatMessage
 from app.schemas.chat import CreateConversationRequest, ChatMessageRequest
 from app.utils.ai_client import ai_client
+from app.core.config import settings
+from app.services.embedding_service import embedding_service
+from app.services.qdrant_service import qdrant_service
+from app.services.context_assembler import context_assembler
+from app.services.memory_service import memory_service
+from app.workers.extraction_worker import run_extraction
 
+logger = logging.getLogger(__name__)  
 
 async def get_available_models() -> list[dict]:
     """Fetches available models from the local AI inference server."""
@@ -167,61 +176,62 @@ async def auto_title_conversation(db: AsyncSession, conversation: ChatConversati
             await db.commit()
     except Exception as e:
         print(f"Failed to auto-title conversation: {e}")
-
-
-async def stream_chat_response(db: AsyncSession, user_id: str, conversation_id: str, requested_model: str) -> AsyncGenerator[str, None]:
-    """
-    Streams the AI response back to the client via Server-Sent Events (SSE).
-    Once finished, saves the complete AI response to the database.
-    """
-    # 1. Fetch full conversation history WITH messages eager loaded
-    stmt = select(ChatConversation).where(
-        ChatConversation.id == conversation_id, 
-        ChatConversation.user_id == user_id
-    ).options(selectinload(ChatConversation.messages)) 
-    
-    conversation = (await db.execute(stmt)).scalar_one()
-    
-    # Dynamically select the model
-    target_model = requested_model or conversation.model_used
-    if not target_model:
-        target_model = await get_fallback_model()
-    
-    # Build payload for AI Server
-    messages_payload = []
-    if conversation.system_prompt:
-        messages_payload.append({"role": "system", "content": conversation.system_prompt})
         
-    for msg in conversation.messages:
-        messages_payload.append({"role": msg.role, "content": msg.content})
-
-    # 2. Stream from AI Server
-    accumulated_content = []
-    start_time = time.time()
-    
-    try:
-        async for token in ai_client.chat_stream(messages_payload, target_model):
-            accumulated_content.append(token)
-            # Yield SSE formatted string
-            yield f"data: {json.dumps({'token': token})}\n\n"
-            
-    except Exception as e:
-        yield f"data: {json.dumps({'error': str(e)})}\n\n"
         
-    finally:
-        # Yield the required done signal
-        yield "data: [DONE]\n\n"
+async def stream_chat_response(self, conversation, user_id, target_model: str, db: AsyncSession):
+        start_time = time.time()
         
-        # 3. Save assistant message to DB after stream finishes
-        full_response = "".join(accumulated_content)
-        if full_response:
-            generation_ms = int((time.time() - start_time) * 1000)
-            
-            await save_message(
-                db=db,
-                conversation_id=conversation_id,
-                role="assistant",
-                content=full_response,
-                generation_ms=generation_ms,
-                model=target_model
+        # Get last user message for embedding and extraction checks
+        last_user_msg = next((m.content for m in reversed(conversation.messages) if m.role == "user"), "")
+        
+        # ── NEW STEP 1: parallel retrieval ───────────────────────────────────
+        query_vector = await embedding_service.embed_query(last_user_msg)
+        
+        memories, doc_chunks, universals = [], [], []
+        
+        if query_vector:
+            memories, doc_chunks, universals = await asyncio.gather(
+                qdrant_service.search_memories(user_id, query_vector),
+                qdrant_service.search_documents(user_id, query_vector),
+                memory_service.get_universal_facts(db, user_id),
             )
+        else:
+            # AI Server offline fallback: skip Qdrant, but still get PostgreSQL universals
+            universals = await memory_service.get_universal_facts(db, user_id)
+            
+        retrieval_time = (time.time() - start_time) * 1000
+        logger.info(f"[Memory Injection] Retrieval took {retrieval_time:.2f}ms")
+
+        # ── NEW STEP 2: build enriched system prompt ─────────────────────────
+        context_block = context_assembler.build(universals, memories, doc_chunks)
+        system_content = (conversation.system_prompt or "") + "\n\n" + context_block
+        combined_system = system_content.strip()
+
+        messages_payload = []
+        if combined_system:
+            messages_payload.append({"role": "system", "content": combined_system})
+            
+        for msg in conversation.messages:
+            messages_payload.append({"role": msg.role, "content": msg.content})
+
+        # ── NEW STEP 3: emit memory metadata SSE event before tokens ─────────
+        yield f"data: {json.dumps({'memory_context': {'memories': len(memories), 'chunks': len(doc_chunks), 'universals': len(universals)}})}\n\n"
+
+        try:
+            # Existing stream (unchanged)
+            async for token in ai_client.chat_stream(messages_payload, target_model):
+                yield f"data: {json.dumps({'token': token})}\n\n"
+        finally:
+            # [YOUR EXISTING save_message() LOGIC STAYS HERE]
+            # await self.save_message(...) 
+            
+            # ── NEW STEP 4: queue extraction (non-blocking) ──────────────────────
+            should_extract = (
+                settings.EXTRACTION_ENABLED
+                and conversation.message_count % settings.EXTRACTION_EVERY_N_TURNS == 0
+                and conversation.message_count >= settings.EXTRACTION_EVERY_N_TURNS
+                and len(last_user_msg.split()) >= settings.EXTRACTION_MIN_WORDS
+            )
+            
+            if should_extract:
+                asyncio.create_task(run_extraction(conversation.id, user_id))

@@ -29,6 +29,11 @@ class AISettings(BaseSettings):
     TOP_K: int = 40
     REPEAT_PENALTY: float = 1.1
     MAX_THINK_TOKENS: int = 24576
+    
+    # ── Embedding Model Settings ──────────────────────────────────────────────
+    EMBEDDING_MODEL: str = "nomic-ai/nomic-embed-text-v1.5"
+    EMBEDDING_DIMENSIONS: int = 768
+    EMBEDDING_BATCH_SIZE: int = 32
 
     model_config = SettingsConfigDict(
         env_file=str(_ENV_FILE),

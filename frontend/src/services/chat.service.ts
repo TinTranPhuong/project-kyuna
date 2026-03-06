@@ -10,6 +10,8 @@ import type {
 export type { Conversation, ConversationWithMessages, ModelInfo, Message }
 
 export const chatService = {
+  // Store context extracted from the SSE stream so the store can pick it up
+  _lastMemoryContext: null as { memories: number; chunks: number; universals: number } | null,
 
   // ─── Conversations ──────────────────────────────────────────────────────────
 
@@ -37,7 +39,6 @@ export const chatService = {
     await axiosInstance.delete(`/api/v1/chat/conversations/${id}`)
   },
 
-  // NEW: Update conversation title
   updateConversationTitle: async (id: string, title: string): Promise<Conversation> => {
     const response = await axiosInstance.patch<Conversation>(`/api/v1/chat/conversations/${id}`, { title })
     return response.data
@@ -100,7 +101,16 @@ export const chatService = {
           if (data === '[DONE]') return
 
           try {
-            const parsed = JSON.parse(data) as { token?: string }
+            const parsed = JSON.parse(data) as { 
+              token?: string; 
+              memory_context?: { memories: number; chunks: number; universals: number }; 
+              error?: string 
+            }
+            
+            if (parsed.memory_context) {
+              chatService._lastMemoryContext = parsed.memory_context
+            }
+
             if (parsed.token) yield parsed.token
           } catch {
             // Skip malformed JSON
