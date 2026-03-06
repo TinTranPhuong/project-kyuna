@@ -20,3 +20,73 @@ Shutdown: Unloading models and purging VRAM...
 [Config] MAX_TOKENS=32768  N_CTX=32768  CHAT_MODEL=Qwen3.5-35B-A3B-UD-IQ3_S.gguf
 Server started. Models will be lazy-loaded on first request.
 INFO:     127.0.0.1:51345 - "POST /v1/memory/extract HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52702 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50062 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62381 - "GET /v1/models HTTP/1.1" 200 OK
+
+[System] Switching model to: 'Qwen3VL-8B-Instruct-Q8_0.gguf'...
+INFO:     127.0.0.1:53201 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+
+
+==================================================================
+  Generating (Qwen3VL-8B-Instruct-Q8_0.gguf)
+==================================================================
+  Max tokens:                        10
+  Temp / Top-P:                      0.7 / 0.9
+------------------------------------------------------------------
+Output: Lo-fi Work Music Recommendations
+
+==================================================================
+  Performance Report
+==================================================================
+  Model:                             Qwen3VL-8B-Instruct-Q8_0.gguf
+  Prompt tokens:                     ~112 (est)
+  Generated tokens:                  5
+------------------------------------------------------------------
+  Time to first token:               186.2 ms
+  Generation time:                   0.16 s
+  Total time:                        0.34 s
+------------------------------------------------------------------
+  Tokens / second:                   32.22 tok/s
+  ms / token:                        31.04 ms/tok
+------------------------------------------------------------------
+  VRAM Usage:                        10755 MB
+==================================================================
+
+
+INFO:     127.0.0.1:57455 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58539 - "GET /v1/models HTTP/1.1" 200 OK
+
+[System] Switching model to: 'Qwen3.5-35B-A3B-UD-IQ3_S.gguf'...
+INFO:     127.0.0.1:58542 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+
+
+==================================================================
+  Generating (Qwen3.5-35B-A3B-UD-IQ3_S.gguf)
+==================================================================
+  Max tokens:                        10
+  Temp / Top-P:                      0.7 / 0.9
+------------------------------------------------------------------
+Output: Thinking Process:
+
+1.  **Analyze
+
+==================================================================
+  Performance Report
+==================================================================
+  Model:                             Qwen3.5-35B-A3B-UD-IQ3_S.gguf
+  Prompt tokens:                     ~112 (est)
+  Generated tokens:                  10
+------------------------------------------------------------------
+  Time to first token:               988.4 ms
+  Generation time:                   0.27 s
+  Total time:                        1.25 s
+------------------------------------------------------------------
+  Tokens / second:                   37.70 tok/s
+  ms / token:                        26.52 ms/tok
+------------------------------------------------------------------
+  VRAM Usage:                        16101 MB
+==================================================================
+
+
+INFO:     127.0.0.1:52627 - "GET /v1/models HTTP/1.1" 200 OK
