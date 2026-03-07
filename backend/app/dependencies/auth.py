@@ -8,7 +8,6 @@ from app.core.database import get_db
 from app.models.user import User
 
 import uuid
-from fastapi import Depends, HTTPException, status
 
 # This tells FastAPI where the client should go to get a token
 # (Used for the built-in Swagger UI authorization button)

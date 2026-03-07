@@ -4,7 +4,8 @@ from uuid import UUID
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import (
     Distance, VectorParams, PointStruct,
-    Filter, FieldCondition, MatchValue
+    Filter, FieldCondition, MatchValue,
+    PointIdsList,
 )
 
 from app.core.config import settings
@@ -44,6 +45,8 @@ class QdrantService:
     def _user_filter(self, user_id: UUID) -> Filter:
         return Filter(must=[FieldCondition(key="user_id", match=MatchValue(value=str(user_id)))])
 
+    # ── Upsert helpers ────────────────────────────────────────────────────────
+
     async def upsert_memory(self, fact_id: UUID, vector: list[float], payload: dict) -> bool:
         try:
             await self.client.upsert(
@@ -77,46 +80,48 @@ class QdrantService:
             logger.error(f"[Qdrant] upsert_universal failed for {fact_id}: {e}")
             return False
 
-    async def search_memories(self, user_id: UUID, vector: list[float], top_k: int = 5, threshold: float = 0.72) -> list[dict]:
+    # ── Search helpers ────────────────────────────────────────────────────────
+    # FIX: qdrant-client >= 1.7 removed .search() — replaced by .query_points()
+    # .query_points() returns a QueryResponse with a .points attribute (list[ScoredPoint])
+
+    async def _query(
+        self,
+        collection_name: str,
+        vector: list[float],
+        query_filter: Filter | None,
+        top_k: int,
+        threshold: float | None = None,
+    ) -> list[dict]:
+        """
+        Unified search helper using the new query_points() API.
+        Returns [] gracefully when Qdrant is offline or collection missing.
+        """
         try:
-            results = await self.client.search(
-                collection_name="conversation_memories",
-                query_vector=vector,
-                query_filter=self._user_filter(user_id),
+            kwargs = dict(
+                collection_name=collection_name,
+                query=vector,
                 limit=top_k,
-                score_threshold=threshold
+                with_payload=True,
             )
-            return [{"id": r.id, "score": r.score, "payload": r.payload} for r in results]
+            if query_filter is not None:
+                kwargs["query_filter"] = query_filter
+            if threshold is not None:
+                kwargs["score_threshold"] = threshold
+
+            response = await self.client.query_points(**kwargs)
+            return [{"id": r.id, "score": r.score, "payload": r.payload} for r in response.points]
         except Exception as e:
-            logger.warning(f"[Qdrant] search_memories failed: {e}")
+            logger.warning(f"[Qdrant] query failed on '{collection_name}': {e}")
             return []
 
-    async def search_documents(self, user_id: UUID, vector: list[float], top_k: int = 3, threshold: float = 0.72) -> list[dict]:
-        try:
-            results = await self.client.search(
-                collection_name="documents",
-                query_vector=vector,
-                query_filter=self._user_filter(user_id),
-                limit=top_k,
-                score_threshold=threshold
-            )
-            return [{"id": r.id, "score": r.score, "payload": r.payload} for r in results]
-        except Exception as e:
-            logger.warning(f"[Qdrant] search_documents failed: {e}")
-            return []
+    async def search_memories(self, user_id: UUID, vector: list[float], top_k: int = 5, threshold: float = 0.72) -> list[dict]:
+        return await self._query("conversation_memories", vector, self._user_filter(user_id), top_k, threshold)
+
+    async def search_documents(self, user_id: UUID, vector: list[float], top_k: int = 3, threshold: float = 0.55) -> list[dict]:
+        return await self._query("documents", vector, self._user_filter(user_id), top_k, threshold)
 
     async def search_universal(self, user_id: UUID, vector: list[float], top_k: int = 10) -> list[dict]:
-        try:
-            results = await self.client.search(
-                collection_name="universal_facts",
-                query_vector=vector,
-                query_filter=self._user_filter(user_id),
-                limit=top_k
-            )
-            return [{"id": r.id, "score": r.score, "payload": r.payload} for r in results]
-        except Exception as e:
-            logger.warning(f"[Qdrant] search_universal failed: {e}")
-            return []
+        return await self._query("universal_facts", vector, self._user_filter(user_id), top_k)
 
     async def search_all(self, user_id: UUID, vector: list[float]) -> dict:
         """Parallel search across all 3 collections. Used by Memory Search tab."""
@@ -128,9 +133,14 @@ class QdrantService:
         )
         return {"memories": m, "documents": d, "universals": u}
 
+    # ── Delete helpers ────────────────────────────────────────────────────────
+
     async def delete_point(self, collection: str, point_id: UUID) -> bool:
         try:
-            await self.client.delete(collection_name=collection, points_selector=[str(point_id)])
+            await self.client.delete(
+                collection_name=collection,
+                points_selector=PointIdsList(points=[str(point_id)])
+            )
             return True
         except Exception as e:
             logger.error(f"[Qdrant] delete_point failed {collection}/{point_id}: {e}")
@@ -148,7 +158,7 @@ class QdrantService:
             return False
 
     async def delete_by_doc(self, doc_id: UUID) -> bool:
-        """Delete all chunk vectors for a document. Called when deleting a document."""
+        """Delete all chunk vectors for a document."""
         try:
             await self.client.delete(
                 collection_name="documents",

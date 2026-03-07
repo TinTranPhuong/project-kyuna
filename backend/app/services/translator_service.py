@@ -1,14 +1,13 @@
 import base64
 import json
 import shutil
-import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncGenerator
 from uuid import UUID
 from fastapi import HTTPException
 from sqlalchemy.orm import selectinload
-from sqlalchemy import desc, select
+from sqlalchemy import desc, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.translator import TranslationJob, TranslationPage
@@ -17,7 +16,6 @@ from app.utils.image_utils import resize_image_for_ocr
 from app.utils.zip_utils import create_zip_stream as generate_zip_stream
 from app.services import file_service
 
-# ─── LEGACY VISION PIPELINE ────────────────────────────────────────────────
 
 async def process_job_vision(job_id: UUID) -> None:
     """
@@ -147,7 +145,7 @@ async def _run_vision_job(db: AsyncSession, job_id: UUID) -> None:
                 await db.commit()
                 
                 print(f"Backend Task Failed on Page {page_number}: {e}")
-                break 
+                break # <-- Legal here because it is indented inside the 'for' loop
 
         # Step 4: Mark the entire job as complete (if no pages failed)
         if job.status != "failed":
@@ -156,229 +154,41 @@ async def _run_vision_job(db: AsyncSession, job_id: UUID) -> None:
             await db.commit()
 
     except Exception as e:
-        # 7. OUTER CATCH: Catastrophic failure
+        # 7. OUTER CATCH: Catastrophic failure (e.g., file reading errors)
+        # NO break statement here!
         await db.rollback()
         job.status = "failed"
         job.error_message = f"Unhandled error: {str(e)}"
         await db.commit()
         print(f"Backend Task Catastrophic Failure: {e}")
-
-# ─── NEW 6-STAGE PIPELINE ──────────────────────────────────────────────────
-
-async def process_job_pipeline(job_id: UUID) -> None:
-    """
-    Background task for the 6-stage pipeline.
-    Creates its own DB session — never use a request-scoped session here.
-    """
-    from app.core.database import AsyncSessionLocal
-    
-    async with AsyncSessionLocal() as db:
-        try:
-            await _run_pipeline(db, job_id)
-        except Exception as e:
-            # Last-resort error catch
-            print(f"PIPELINE FATAL ERROR: {traceback.format_exc()}")
-            async with AsyncSessionLocal() as err_db:
-                job = await err_db.get(TranslationJob, job_id)
-                if job and job.status != "failed":
-                    job.status = "failed"
-                    job.error_message = f"Unhandled pipeline error: {e}"
-                    await err_db.commit()
-            raise
-
-async def _run_pipeline(db: AsyncSession, job_id: UUID) -> None:
-    job = await db.get(TranslationJob, job_id)
-    if not job:
-        return
-
-    # ── Mark job as processing ──────────────────────────────────────────────
-    print(f"[Pipeline] Starting Job {job_id}")
-    job.status = "processing"
-    job.started_at = datetime.now(timezone.utc)
-    await db.commit()
-
-    try:
-        # ── Get image paths ───────────────────────────────────────────────
-        job_dir = file_service.get_upload_dir(job.user_id, job.id)
-        original_dir = job_dir / "original"
-
-        # ── CBZ extraction ────────────────────────────────────────────────
-        raw_files = list(original_dir.glob("*"))
-        if len(raw_files) == 1 and raw_files[0].suffix.lower() in [".cbz", ".zip"]:
-            from app.services.file_service import extract_cbz
-            extract_cbz(str(raw_files[0]), str(original_dir))
-
-        # FIX 1: Recursive Search (.rglob) to find nested images in CBZ folders
-        IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
-        image_paths = sorted(
-            [str(p) for p in original_dir.rglob("*") if p.suffix.lower() in IMAGE_EXTS],
-            key=lambda s: file_service.natural_sort_key(s),
-        )
-
-        if not image_paths:
-            job.status = "failed"
-            job.error_message = "No image files found after extraction."
-            await db.commit()
-            return
         
-        # ── Update page count so frontend knows total pages immediately ───
-        job.page_count = len(image_paths)
-        print(f"[Pipeline] Found {len(image_paths)} pages")
-        await db.commit()
-
-        # ── Create page records (1-based index) ──────────────────────────
-        pages_to_process = []
-        for i, img_path in enumerate(image_paths):
-            page_num = i + 1  # Strict 1-based indexing
-            
-            stmt = select(TranslationPage).where(
-                TranslationPage.job_id == job_id,
-                TranslationPage.page_number == page_num
-            )
-            result = await db.execute(stmt)
-            page = result.scalar_one_or_none()
-
-            if not page:
-                page = TranslationPage(
-                    job_id=job_id,
-                    page_number=page_num,
-                    original_path=img_path,
-                    phase_status="pending",
-                    processing_status="processing"
-                )
-                db.add(page)
-            else:
-                # Reset existing page
-                page.phase_status = "pending"
-                page.processing_status = "processing"
-                page.error_message = None
-                page.regions_json = None
-                page.translated_path = None
-                
-            pages_to_process.append(page)
-
-        await db.commit()
-        for p in pages_to_process:
-            await db.refresh(p)
-
-        # ════════════════════════════════════════════════════════════════════════
-        # PASS 1: Detection + OCR (Stages 1-3)
-        # ════════════════════════════════════════════════════════════════════════
-        ocr_results = {} # page_num -> regions
-
-        for page in pages_to_process:
-            try:
-                print(f"[Pipeline] OCR Stage for Page {page.page_number}")
-                page.phase_status = "detecting"
-                await db.commit()
-                
-                with open(page.original_path, "rb") as f:
-                    img_b64 = base64.b64encode(f.read()).decode("utf-8")
-                
-                regions = await ai_client.ocr_pipeline(img_b64)
-                
-                if not regions:
-                    print(f"[Pipeline] Page {page.page_number}: No text detected")
-                    page.phase_status = "completed"
-                    page.processing_status = "no_text"
-                    page.has_text = False
-                else:
-                    page.phase_status = "ocr" # Signal OCR completion
-                    ocr_results[page.page_number] = regions
-                
-                await db.commit()
-                
-            except Exception as e:
-                print(f"[Pipeline] OCR Error Page {page.page_number}: {e}")
-                page.phase_status = "failed"
-                page.processing_status = "failed"
-                page.error_message = f"OCR Error: {e}"
-                await db.commit()
-
-        # ════════════════════════════════════════════════════════════════════════
-        # PASS 2: Translation (Stage 5) - WITH RETRY LOGIC
-        # ════════════════════════════════════════════════════════════════════════
-        for page in pages_to_process:
-            # Skip pages that failed step 1 or have no text
-            if page.page_number not in ocr_results:
-                continue
-                
-            regions = ocr_results[page.page_number]
-            
-            # FIX 2: RETRY LOOP for LLM Non-Determinism
-            max_retries = 3
-            success = False
-            
-            for attempt in range(max_retries):
-                try:
-                    if attempt == 0:
-                        print(f"[Pipeline] Translating Page {page.page_number}")
-                    else:
-                        print(f"[Pipeline] Retry {attempt+1}/{max_retries} for Page {page.page_number}")
-                        
-                    page.phase_status = "translating"
-                    await db.commit()
-                    
-                    # Call AI Server
-                    translated_regions = await ai_client.translate_batch(regions)
-                    
-                    page.regions_json = json.dumps(translated_regions, ensure_ascii=False)
-                    page.translated_path = str(page.original_path) 
-                    page.has_text = True
-                    page.phase_status = "done"
-                    page.processing_status = "completed"
-                    await db.commit()
-                    
-                    success = True
-                    break # Success! Exit retry loop
-                    
-                except Exception as e:
-                    print(f"[Pipeline] Attempt {attempt+1} failed for Page {page.page_number}: {e}")
-                    import asyncio
-                    if attempt < max_retries - 1:
-                        await asyncio.sleep(2) 
-
-            if not success:
-                page.phase_status = "failed"
-                page.error_message = "Translation failed after 3 attempts"
-                await db.commit()
-
-        # ── Mark job complete ────────────────────────────────────────────────────
-        if job.status != "failed":
-            job.status = "completed"
-            job.completed_at = datetime.now(timezone.utc)
-            await db.commit()
-            print(f"[Pipeline] Job {job_id} Finished")
-
-    except Exception as e:
-        print(f"[Pipeline] CATASTROPHIC JOB FAILURE: {e}")
-        await db.rollback()
-        job.status = "failed"
-        job.error_message = f"Catastrophic pipeline error: {str(e)}"
-        await db.commit()
-
-# ─── CRUD Helper Methods ──────────────────────────────────────────────────
-
 async def create_zip_stream(job_id: UUID, db: AsyncSession) -> AsyncGenerator[bytes, None]:
+    """
+    Stream a ZIP of all translated pages without loading all into memory.
+    """
     stmt = select(TranslationPage).where(TranslationPage.job_id == job_id).order_by(TranslationPage.page_number)
     result = await db.execute(stmt)
     pages = result.scalars().all()
 
     file_paths = []
     for page in pages:
+        # Use translated path if available, fallback to original
         source_path = page.translated_path or page.original_path
         if source_path and Path(source_path).exists():
             name_in_zip = f"page_{page.page_number:03d}{Path(source_path).suffix}"
             file_paths.append((source_path, name_in_zip))
 
+    # Yield the async generator directly from zip_utils
     async for chunk in generate_zip_stream(file_paths):
         yield chunk
+        
+# ─── CRUD Helper Methods ──────────────────────────────────────────────────
 
 async def create_translation_job(db: AsyncSession, user_id: UUID, filename: str, file_size: int, source_lang: str, target_lang: str) -> TranslationJob:
     job = TranslationJob(
         user_id=user_id, 
         original_filename=filename, 
-        file_path="", 
+        file_path="",  # <-- Add this temporary placeholder!
         file_size_bytes=file_size, 
         source_language=source_lang, 
         target_language=target_lang
@@ -413,6 +223,7 @@ async def get_job_detail(db: AsyncSession, user_id: UUID, job_id: str) -> Transl
     return job
 
 async def reset_job_for_retranslation(db: AsyncSession, user_id: UUID, job_id: UUID) -> TranslationJob:
+    # Fetch job with pages loaded
     stmt = select(TranslationJob).where(
         TranslationJob.id == job_id, 
         TranslationJob.user_id == user_id
@@ -423,14 +234,17 @@ async def reset_job_for_retranslation(db: AsyncSession, user_id: UUID, job_id: U
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
         
+    # 1. Reset Job Level
     job.status = "pending"
     job.error_message = None
     job.completed_at = None
+    # Note: We do NOT reset the 'engine' here anymore, we let the router decide.
     
+    # 2. Reset Page Level (Critical for Pipeline restart)
     for page in job.pages:
         page.processing_status = "pending"
-        page.phase_status = "pending"
-        page.regions_json = None
+        page.phase_status = "pending"  # <--- Reset pipeline stage to 0
+        page.regions_json = None       # <--- Clear old bubbles
         page.translated_path = None
         page.error_message = None
         page.has_text = False
@@ -440,21 +254,33 @@ async def reset_job_for_retranslation(db: AsyncSession, user_id: UUID, job_id: U
     await db.refresh(job)
     return job
 
-async def delete_translation_job(db: AsyncSession, user_id: UUID, job_id: UUID) -> None:
+async def delete_translation_job(db: AsyncSession, user_id: UUID, job_id: UUID) -> None: # <-- Changed to UUID
     stmt = select(TranslationJob).where(TranslationJob.id == job_id, TranslationJob.user_id == user_id)
     result = await db.execute(stmt)
     job = result.scalar_one_or_none()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
         
+    # Delete from disk
     job_dir = file_service.get_upload_dir(user_id, job.id)
     if job_dir.exists():
         shutil.rmtree(job_dir)
         
+    # Delete from DB
     await db.delete(job)
     await db.commit()
 
-async def get_page_file_path(db: AsyncSession, user_id: UUID, job_id: UUID, page_num: int, image_type: str) -> str:
+async def get_page_file_path(
+    db: AsyncSession, 
+    user_id: UUID, 
+    job_id: UUID,  # <-- Explicitly named and typed
+    page_num: int, 
+    image_type: str
+) -> str:
+    """
+    Retrieves the physical path for a page image.
+    Checks ownership and verifies the file exists on the filesystem.
+    """
     stmt = select(TranslationPage).join(TranslationJob).where(
         TranslationJob.user_id == user_id,
         TranslationPage.job_id == job_id,
@@ -464,28 +290,205 @@ async def get_page_file_path(db: AsyncSession, user_id: UUID, job_id: UUID, page
     page = result.scalar_one_or_none()
     
     if not page:
-        raise HTTPException(status_code=404, detail=f"Page {page_num} not found")
+        raise HTTPException(status_code=404, detail=f"Page {page_num} not found for this job")
         
     target_path = page.translated_path if image_type == "translated" else page.original_path
     
     if not target_path or not Path(target_path).exists():
+        # If it's the original and it's missing, that's a real 404
         if image_type == "original":
-             raise HTTPException(status_code=404, detail="Original image missing")
-        raise HTTPException(status_code=404, detail="Translated image not generated")
+             raise HTTPException(status_code=404, detail="Original image missing on disk")
+        # If it's translated and missing, raise 404 so the router can catch and fallback
+        raise HTTPException(status_code=404, detail="Translated image not yet generated")
         
     return str(target_path)
 
+async def process_job_pipeline(job_id: UUID) -> None:
+    """
+    Background task for the 6-stage pipeline.
+    Creates its own DB session — never use a request-scoped session here.
+    """
+    from app.core.database import AsyncSessionLocal
+    
+    async with AsyncSessionLocal() as db:
+        try:
+            await _run_pipeline(db, job_id)
+        except Exception as e:
+            # Last-resort error catch
+            async with AsyncSessionLocal() as err_db:
+                job = await err_db.get(TranslationJob, job_id)
+                if job and job.status != "failed":
+                    job.status = "failed"
+                    job.error_message = f"Unhandled pipeline error: {e}"
+                    await err_db.commit()
+            raise
+
+
+async def _run_pipeline(db: AsyncSession, job_id: UUID) -> None:
+    job = await db.get(TranslationJob, job_id)
+    if not job:
+        return
+
+    # ── Mark job as processing ──────────────────────────────────────────────
+    job.status = "processing"
+    job.started_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    try:
+        # ── Get image paths ───────────────────────────────────────────────
+        job_dir = file_service.get_upload_dir(job.user_id, job.id)
+        original_dir = job_dir / "original"
+
+        # ── CBZ extraction ────────────────────────────────────────────────
+        # If the upload is a CBZ/ZIP, extract images before processing.
+        # extract_cbz() handles zip-slip, __MACOSX junk, and natural sort.
+        raw_files = list(original_dir.glob("*"))
+        if len(raw_files) == 1 and raw_files[0].suffix.lower() == ".cbz":
+            from app.services.file_service import extract_cbz
+            extract_cbz(str(raw_files[0]), str(original_dir))
+
+        # Only pick image files — skip the .cbz itself
+        IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+        image_paths = sorted(
+            [str(p) for p in original_dir.glob("*") if p.suffix.lower() in IMAGE_EXTS],
+            key=lambda s: file_service.natural_sort_key(s),
+        )
+
+        if not image_paths:
+            job.status = "failed"
+            job.error_message = "No image files found after extraction."
+            await db.commit()
+            return
+        
+        # ── Update page count so frontend knows total pages immediately ───
+        job.page_count = len(image_paths)
+        await db.commit()
+
+        # ── Create page records ──────────────────────────────────────────
+        pages = []
+        for page_number, img_path in enumerate(image_paths, start=1):
+            stmt = select(TranslationPage).where(
+                TranslationPage.job_id == job_id,
+                TranslationPage.page_number == page_number
+            )
+            result = await db.execute(stmt)
+            page = result.scalar_one_or_none()
+
+            if not page:
+                page = TranslationPage(
+                    job_id=job_id,
+                    page_number=page_number,
+                    original_path=img_path,
+                    phase_status="pending",
+                    processing_status="processing"
+                )
+                db.add(page)
+            else:
+                page.phase_status = "pending"
+                page.processing_status = "processing"
+                page.error_message = None
+                page.regions_json = None
+                page.translated_path = None
+                page.has_text = False
+                
+            pages.append(page)
+
+        await db.commit()
+        for p in pages:
+            await db.refresh(p)
+
+        # ════════════════════════════════════════════════════════════════════════
+        # PASS 1: Stages 1–3 for ALL pages (detection + crop + OCR via unified API)
+        # ════════════════════════════════════════════════════════════════════════
+        all_page_regions = []
+
+        for page, img_path in zip(pages, image_paths):
+            try:
+                page.phase_status = "detecting" # We use "detecting" to signal the start of the OCR pipeline
+                await db.commit()
+                
+                with open(img_path, "rb") as f:
+                    img_b64 = base64.b64encode(f.read()).decode("utf-8")
+                
+                # CRITICAL ARCHITECTURE FIX: One unified call for Stages 1, 2, and 3
+                regions = await ai_client.ocr_pipeline(img_b64)
+                
+                if not regions:
+                    page.phase_status = "completed"
+                    page.processing_status = "no_text"
+                    page.has_text = False
+                    await db.commit()
+                    all_page_regions.append([])
+                    continue
+                
+                page.phase_status = "ocr" # Signal OCR completion
+                await db.commit()
+                all_page_regions.append(regions)
+                
+            except Exception as e:
+                page.phase_status = "failed"
+                page.processing_status = "failed"
+                page.error_message = f"Stage 1-3 OCR Pipeline error: {e}"
+                await db.commit()
+                all_page_regions.append([])
+
+        # ════════════════════════════════════════════════════════════════════════
+        # HANGOFF PROTOCOL & PASS 2: Stage 5 — Translation for ALL pages
+        # ════════════════════════════════════════════════════════════════════════
+        
+        for page, regions, img_path in zip(pages, all_page_regions, image_paths):
+            if page.phase_status == "failed" or page.processing_status == "no_text":
+                continue
+                
+            try:
+                page.phase_status = "translating"
+                await db.commit()
+                
+                # The Hangoff protocol runs transparently inside this call on the AI server
+                translated_regions = await ai_client.translate_batch(regions)
+                
+                # Update DB with final JSON
+                page.regions_json = json.dumps(translated_regions, ensure_ascii=False)
+                
+                # Serve the original image (Frontend handles the UI rendering now)
+                page.translated_path = str(img_path) 
+                page.has_text = True
+                page.phase_status = "done"
+                page.processing_status = "completed"
+                await db.commit()
+                
+            except Exception as e:
+                page.phase_status = "failed"
+                page.processing_status = "failed"
+                page.error_message = f"Stage 5 Translation error: {e}"
+                await db.commit()
+
+        # ── Mark job complete ────────────────────────────────────────────────────
+        # Only mark job completed if it wasn't marked failed by a catastrophic error
+        if job.status != "failed":
+            job.status = "completed"
+            job.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+
+    except Exception as e:
+        await db.rollback()
+        job.status = "failed"
+        job.error_message = f"Catastrophic pipeline error: {str(e)}"
+        await db.commit()
 
 async def count_translated_pages(db: AsyncSession, user_id: UUID) -> int:
-    """Count total translation pages with status done, for dashboard stats."""
-    from sqlalchemy import func as sa_func
+    """
+    Returns the total number of successfully translated pages for a user.
+    Called by dashboard /stats endpoint.
+    Counts TranslationPage rows with processing_status='completed' joined to jobs owned by user.
+    """
     stmt = (
-        select(sa_func.count(TranslationPage.id))
+        select(func.count(TranslationPage.id))
         .join(TranslationJob, TranslationPage.job_id == TranslationJob.id)
         .where(
             TranslationJob.user_id == user_id,
             TranslationPage.processing_status == "completed",
         )
     )
-    result = await db.execute(stmt)
-    return result.scalar_one() or 0
+    result = await db.scalar(stmt)
+    return result or 0

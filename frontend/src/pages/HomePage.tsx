@@ -39,7 +39,7 @@ export default function HomePage() {
   const user = useAuthStore(state => state.user);
   const logout = useAuthStore(state => state.logout);
 
-  const setCustomWallpaper = useSettingsStore(state => state.setCustomWallpaper);
+  const uploadWallpaper = useSettingsStore(state => state.uploadWallpaper);
   const [showDropdown, setShowDropdown] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -62,11 +62,7 @@ export default function HomePage() {
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setCustomWallpaper(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+      void uploadWallpaper(file);
     }
     setShowDropdown(false); 
   };

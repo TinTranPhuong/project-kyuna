@@ -1,64 +1,39 @@
-import { create } from 'zustand'
-import { translatorService } from '@/services/translator.service'
-import { useAuthStore } from '@/store/authStore'
-import type { TranslationJobDetail } from '@/services/translator.service'
-import type { TranslationJob, TranslationRegion, PipelineRegion, OverlayMode } from '@/types/translator.types'
+import { create } from 'zustand';
+import { translatorService } from '@/services/translator.service';
+import type { TranslationJob, TranslationJobDetail } from '@/types/translator.types';
 
-export type { TranslationJob }
+export type OverlayMode = 'dots' | 'text' | 'original';
 
 interface TranslatorState {
-  jobs: TranslationJob[]
-  activeJobId: string | null
-  currentPage: number
-  totalPages: number
-  isUploading: boolean
-  uploadProgress: number
-  sourceLanguage: string
-  targetLanguage: string
-  showOriginal: boolean
-  showOverlay: boolean 
-  overlayMode: OverlayMode
-  showDots: boolean
-  
-  pageRegions: Record<number, (TranslationRegion | PipelineRegion)[]>
+  jobs: TranslationJob[];
+  activeJobId: string | null;
+  currentPage: number;
+  totalPages: number;
+  isUploading: boolean;
+  uploadProgress: number;
+  sourceLanguage: string;
+  targetLanguage: string;
+  showOriginal: boolean;
 
-  loadJobs: () => Promise<void>
-  uploadFile: (file: File, onProgress?: (pct: number) => void) => Promise<void>
-  selectJob: (id: string) => Promise<void>
-  pollJobStatus: (id: string) => Promise<void>
-  nextPage: () => void
-  prevPage: () => void
-  goToPage: (n: number) => void
-  retranslate: (id: string) => Promise<void>
-  downloadZip: (id: string) => Promise<void>
-  deleteJob: (id: string) => Promise<void>
-  // --- NEW RENAME ACTION ---
-  renameJob: (id: string, newName: string) => Promise<void>
-  
-  toggleShowOriginal: () => void
-  toggleShowOverlay: () => void
-  toggleShowDots: () => void
-  setOverlayMode: (mode: OverlayMode) => void
-  setSourceLanguage: (lang: string) => void
-  setTargetLanguage: (lang: string) => void
-}
+  // Fields PageViewer reads — were missing, causing blank page crash
+  overlayMode: OverlayMode;
+  pageRegions: Record<number, any[]>;  // keyed by page number
 
-function getTotalPages(job: TranslationJob | TranslationJobDetail): number {
-  if ('pages' in job && Array.isArray(job.pages) && job.pages.length > 0) {
-    return job.pages.length
-  }
-  return job.page_count || 1
-}
-
-function triggerBlobDownload(blob: Blob, filename: string): void {
-  const url  = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = filename
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
+  // Actions
+  loadJobs: () => Promise<void>;
+  uploadFile: (file: File, onProgress?: (percent: number) => void) => Promise<void>;
+  selectJob: (id: string) => void;
+  pollJobStatus: (id: string) => Promise<void>;
+  nextPage: () => void;
+  prevPage: () => void;
+  goToPage: (n: number) => void;
+  retranslate: (id: string) => Promise<void>;
+  downloadZip: (id: string) => Promise<void>;
+  deleteJob: (id: string) => Promise<void>;
+  toggleShowOriginal: () => void;
+  setSourceLanguage: (lang: string) => void;
+  setTargetLanguage: (lang: string) => void;
+  setOverlayMode: (mode: OverlayMode) => void;
 }
 
 export const useTranslatorStore = create<TranslatorState>((set, get) => ({
@@ -71,191 +46,144 @@ export const useTranslatorStore = create<TranslatorState>((set, get) => ({
   sourceLanguage: 'auto',
   targetLanguage: 'en',
   showOriginal: false,
-  showOverlay: true,
-  overlayMode: 'dots',
-  showDots: true,
-  pageRegions: {},
+  overlayMode: 'dots',      // default overlay — dots mode
+  pageRegions: {},           // populated by pollJobStatus when job completes
 
   loadJobs: async () => {
     try {
-      const jobs = await translatorService.getJobs()
-      set({ jobs })
+      const jobs = await translatorService.getJobs();
+      set({ jobs });
     } catch (error) {
-      console.error('Failed to load translation jobs:', error)
+      console.error('Failed to load translation jobs', error);
     }
   },
 
-  uploadFile: async (file, onProgress) => {
-    set({ isUploading: true, uploadProgress: 0, pageRegions: {}, overlayMode: 'dots' })
-    const { sourceLanguage, targetLanguage } = get()
+  uploadFile: async (file: File, onProgress?: (percent: number) => void) => {
+    set({ isUploading: true, uploadProgress: 0 });
     try {
-      const newJob = await translatorService.uploadFile(
-        file, sourceLanguage, targetLanguage,
-        (pct) => { set({ uploadProgress: pct }); onProgress?.(pct) }
-      )
-      set(state => ({
+      const { sourceLanguage, targetLanguage } = get();
+      const newJob = await translatorService.uploadFile(file, sourceLanguage, targetLanguage, (progress) => {
+        set({ uploadProgress: progress });
+        if (onProgress) onProgress(progress);
+      });
+
+      set((state) => ({
         jobs: [newJob, ...state.jobs],
         activeJobId: newJob.id,
-        totalPages: getTotalPages(newJob),
-        currentPage: 1,
         isUploading: false,
+        totalPages: 1,
+        currentPage: 1,
         pageRegions: {},
-        overlayMode: 'dots'
-      }))
+      }));
+
+      // Fetch full detail immediately so totalPages is accurate
+      get().pollJobStatus(newJob.id);
+
     } catch (error) {
-      set({ isUploading: false })
-      console.error('Upload failed:', error)
+      set({ isUploading: false });
+      console.error('Upload failed', error);
     }
   },
 
-  selectJob: async (id) => {
-    if (!id) {
-      set({
-        activeJobId: null,
-        currentPage: 1,
-        totalPages: 1,
-        showOriginal: false,
-        pageRegions: {},
-      });
-      return;
-    }
-
-    const job = get().jobs.find(j => j.id === id)
+  selectJob: (id) => {
     set({
       activeJobId: id,
       currentPage: 1,
-      totalPages: job ? getTotalPages(job) : 1,
+      totalPages: 1,
       showOriginal: false,
       pageRegions: {},
-    })
-    await get().pollJobStatus(id);
+    });
+    get().pollJobStatus(id);
   },
 
   pollJobStatus: async (id) => {
     try {
-      const token = useAuthStore.getState().token;
-      const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-      
-      const response = await fetch(`${baseUrl}/api/v1/translate/jobs/${id}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
+      const detail: TranslationJobDetail = await translatorService.getJob(id);
 
-      if (!response.ok) throw new Error(`Status ${response.status}`);
-      const updatedJob: TranslationJobDetail = await response.json();
-      
-      const newPageRegions: Record<number, (TranslationRegion | PipelineRegion)[]> = { ...get().pageRegions }
-      
-      for (const page of updatedJob.pages ?? []) {
-        if (page.regions && page.regions.length > 0) {
-          newPageRegions[page.page_number] = page.regions
+      // Extract regions per page from detail.pages so PageViewer can use them
+      const pageRegions: Record<number, any[]> = {};
+      if (detail.pages) {
+        for (const page of detail.pages) {
+          if (page.regions_json) {
+            try {
+              pageRegions[page.page_number] = JSON.parse(page.regions_json);
+            } catch {
+              pageRegions[page.page_number] = [];
+            }
+          }
         }
       }
 
-      set(state => ({
-        jobs: state.jobs.map(j => j.id === id ? updatedJob : j),
-        pageRegions: newPageRegions,
-        ...(state.activeJobId === id && {
-          totalPages: getTotalPages(updatedJob),
-        }),
-      }))
+      set((state) => ({
+        jobs: state.jobs.map(j => j.id === id ? detail : j),
+        totalPages: detail.id === state.activeJobId
+          ? (detail.pages?.length || 1)
+          : state.totalPages,
+        pageRegions: detail.id === state.activeJobId
+          ? pageRegions
+          : state.pageRegions,
+      }));
     } catch (error) {
-      console.error('Polling error:', error)
+      console.error('Polling error', error);
     }
   },
 
   nextPage: () => {
-    const { currentPage, totalPages } = get()
-    if (currentPage < totalPages) set({ currentPage: currentPage + 1 })
+    const { currentPage, totalPages } = get();
+    if (currentPage < totalPages) set({ currentPage: currentPage + 1 });
   },
 
   prevPage: () => {
-    const { currentPage } = get()
-    if (currentPage > 1) set({ currentPage: currentPage - 1 })
+    const { currentPage } = get();
+    if (currentPage > 1) set({ currentPage: currentPage - 1 });
   },
 
   goToPage: (n) => {
-    const { totalPages } = get()
-    if (n >= 1 && n <= totalPages) set({ currentPage: n })
+    const { totalPages } = get();
+    if (n >= 1 && n <= totalPages) set({ currentPage: n });
   },
 
   retranslate: async (id) => {
     try {
-      const updatedJob = await translatorService.retranslate(id)
-      set(state => ({
-        jobs: state.jobs.map(j => j.id === id ? updatedJob : j),
-        pageRegions: state.activeJobId === id ? {} : state.pageRegions
-      }))
-      void get().pollJobStatus(id)
+      await translatorService.retranslate(id);
+      set({ pageRegions: {} });
+      get().pollJobStatus(id);
     } catch (error) {
-      console.error('Retranslate request failed:', error)
+      console.error('Retranslate request failed', error);
     }
   },
 
   downloadZip: async (id) => {
-    const job = get().jobs.find(j => j.id === id)
-    const filename = job ? `${job.original_filename.replace(/\.[^/.]+$/, '')}_translated.zip` : 'translated.zip'
     try {
-      const blob = await translatorService.downloadZip(id)
-      triggerBlobDownload(blob, filename)
+      const blob = await translatorService.downloadZip(id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `translated_${id}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
     } catch (error) {
-      console.error('Download failed:', error)
+      console.error('Download failed', error);
     }
   },
 
   deleteJob: async (id) => {
     try {
-      await translatorService.deleteJob(id)
-      set(state => {
-        const isActiveJob = state.activeJobId === id;
-        return {
-          jobs: state.jobs.filter(j => j.id !== id),
-          activeJobId: isActiveJob ? null : state.activeJobId,
-          pageRegions: isActiveJob ? {} : state.pageRegions,
-        }
-      })
+      await translatorService.deleteJob(id);
+      set((state) => ({
+        jobs: state.jobs.filter(j => j.id !== id),
+        activeJobId: state.activeJobId === id ? null : state.activeJobId,
+        pageRegions: state.activeJobId === id ? {} : state.pageRegions,
+      }));
     } catch (error) {
-      console.error('Delete failed:', error)
+      console.error('Delete failed', error);
     }
   },
 
-  // --- NEW RENAME IMPLEMENTATION ---
-  renameJob: async (id, newName) => {
-    // 1. Optimistic UI update
-    set(state => ({
-      jobs: state.jobs.map(j => j.id === id ? { ...j, original_filename: newName } : j)
-    }))
+  setOverlayMode: (mode) => set({ overlayMode: mode }),
+  toggleShowOriginal: () => set((state) => ({ showOriginal: !state.showOriginal })),
+  setSourceLanguage: (sourceLanguage) => set({ sourceLanguage }),
+  setTargetLanguage: (targetLanguage) => set({ targetLanguage }),
+}));
 
-    try {
-      const token = useAuthStore.getState().token
-      const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-      
-      await fetch(`${baseUrl}/api/v1/translate/jobs/${id}/rename`, {
-        method: 'PATCH',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ name: newName })
-      })
-    } catch (error) {
-      console.error("Failed to rename job:", error)
-      // Note: We leave the optimistic update as is, 
-      // but in a production app you might want to revert it here.
-    }
-  },
-
-  toggleShowOriginal: () => set(state => ({ showOriginal: !state.showOriginal })),
-  toggleShowOverlay: () => set(state => ({ showOverlay: !state.showOverlay })),
-  
-  toggleShowDots: () => set(state => {
-    const newMode = state.overlayMode === 'dots' ? 'original' : 'dots';
-    return { overlayMode: newMode, showDots: newMode === 'dots' }
-  }),
-  
-  setOverlayMode: (mode) => set({ overlayMode: mode, showDots: mode === 'dots' }),
-  setSourceLanguage: (lang) => set({ sourceLanguage: lang }),
-  setTargetLanguage: (lang) => set({ targetLanguage: lang }),
-}))
+export type { TranslationJob, TranslationJobDetail };

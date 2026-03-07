@@ -51,9 +51,11 @@ export const translatorService = {
       '/api/v1/translate/upload',
       formData,
       {
-        // THE FIX: Override the custom Axios instance defaults
+        // Do NOT set Content-Type manually — axios sets it automatically with
+        // the correct multipart boundary when the body is a FormData instance.
+        // Manually setting it would omit the boundary and break server parsing.
         headers: {
-          'Content-Type': 'multipart/form-data',
+          'Content-Type': undefined,
         },
         onUploadProgress: progressEvent => {
           if (onProgress && progressEvent.total) {

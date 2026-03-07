@@ -1,65 +1,39 @@
-export type JobStatus = 'pending' | 'processing' | 'completed' | 'failed'
-export type PageStatus = 'pending' | 'processing' | 'done' | 'no_text' | 'failed'
-export type OverlayMode = 'dots' | 'text' | 'original'
-
+// Matches backend/app/schemas/translator.py → JobResponse
 export interface TranslationJob {
   id: string
+  user_id: string
   original_filename: string
-  status: JobStatus
+  file_path: string
+  file_size_bytes: number | null
   source_language: string
   target_language: string
-  page_count: number
+  engine: string | null
+  status: 'pending' | 'processing' | 'completed' | 'failed'
   error_message: string | null
   created_at: string
+  started_at: string | null
   completed_at: string | null
-  engine?: 'pipeline' | 'ocr_llm'
+  // NOTE: pages is NOT included in list/upload responses (JobResponse).
+  // Only TranslationJobDetail includes pages.
 }
 
-export interface TranslationRegion {
-  index: number
-  bbox: [number, number, number, number]
-  original: string
-  translated: string
-  center?: [number, number];
-  type: 'dialogue' | 'sfx' | 'narration' | 'title'
-}
-
-// THE FIX: Define this type so the Store accepts it
-export interface PipelineRegion {
-  index: number
-  bbox: [number, number, number, number]
-  japanese: string
-  english: string
-}
-
+// Matches backend/app/schemas/translator.py → PageResponse
 export interface TranslationPage {
   id: string
   job_id: string
   page_number: number
+  original_path: string | null
+  translated_path: string | null
+  processing_status: 'pending' | 'processing' | 'completed' | 'no_text' | 'failed'
+  phase_status: string | null
   has_text: boolean
-  processing_status: PageStatus
+  regions_json: string | null
   error_message: string | null
-  // THE FIX: Allow both region types
-  regions: TranslationRegion[] | PipelineRegion[] | null
-  phase_status?: 'pending' | 'detecting' | 'cropping' | 'ocr' | 'translating' | 'done' | 'failed'
-  regions_json?: string | null
+  processing_ms: number | null
 }
 
+// Matches backend/app/schemas/translator.py → JobDetailResponse
+// This is what GET /jobs/{id} returns — includes pages array
 export interface TranslationJobDetail extends TranslationJob {
   pages: TranslationPage[]
 }
-
-export type PhaseStatus = 'waiting' | 'running' | 'done' | 'failed'
-
-export interface PhaseState {
-  stage: number
-  name: string
-  status: PhaseStatus
-  detail?: string
-}
-
-export type PhaseEvent =
-  | { stage: 1 | 2 | 3 | 4 | 5; name: string; status: 'running' | 'done'; region_count?: number; done?: number; total?: number }
-  | { stage: 6; name: 'Complete'; status: 'done'; regions: PipelineRegion[] }
-  | { stage: 0; name: 'Failed'; status: 'failed'; error: string }
-  | { waiting: true }

@@ -20,7 +20,7 @@ import app.models.session     # noqa: F401  ← UserSettings + PomodoroSession
 import app.models.note        # noqa: F401  ← Note
 import app.models.chat        # noqa: F401  ← ChatConversation + ChatMessage
 import app.models.translator  # noqa: F401  ← TranslationJob + TranslationPage
-import app.models.memory      # noqa: F401  <- MemoryFact, UniversalFact, Document, DocChunk, ExtractionJob
+import app.models.memory      # noqa: F401  ← MemoryFact, UniversalFact, Document, DocChunk, ExtractionJob
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -30,18 +30,15 @@ async def lifespan(app: FastAPI):
     Steps:
       1. Create ALL missing tables from SQLAlchemy models (idempotent).
       2. Add any columns that exist in the model but NOT in the live DB.
-         (create_all only creates tables — it never alters existing ones.)
       3. Ensure the upload directory exists.
+      4. Initialize Qdrant collections (MUST be before yield — was after yield which
+         meant it ran on shutdown, never on startup).
     """
     async with engine.begin() as conn:
         # Step 1: Create any tables that don't exist yet (safe, idempotent).
         await conn.run_sync(Base.metadata.create_all)
 
         # Step 2: Add missing columns to user_settings.
-        # These were defined in the SQLAlchemy model AFTER the table was first
-        # created, so create_all skipped them. We add them manually here.
-        # "ADD COLUMN IF NOT EXISTS" is safe to run every time — it no-ops if
-        # the column already exists.
         await conn.execute(text(
             "ALTER TABLE user_settings "
             "ADD COLUMN IF NOT EXISTS custom_wallpaper TEXT DEFAULT NULL"
@@ -54,11 +51,22 @@ async def lifespan(app: FastAPI):
     # Step 3: Ensure the file-upload directory exists.
     Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
 
-    yield  
-    # Add Qdrant initialization 
-    await qdrant_service.ensure_collections()
-    
+    # Step 4: Initialize Qdrant collections on startup.
+    # FIX: was placed AFTER yield — that made it run on shutdown, never on startup.
+    # Without this, all 3 collections never existed and memory retrieval silently
+    # returned [] on every chat message (documents could not be accessed by the AI).
+    try:
+        await qdrant_service.ensure_collections()
+    except Exception as e:
+        # Log but don't crash the server — Qdrant offline means memory is disabled,
+        # not that the whole application fails to start.
+        print(f"[Startup] Warning: Qdrant unavailable — memory features disabled. {e}")
+
+    yield  # ← application handles requests here
+
+    # Shutdown: dispose the DB connection pool cleanly.
     await engine.dispose()
+
 
 app = FastAPI(
     title="Kyuna API",

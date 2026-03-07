@@ -11,11 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel  # <--- Added for request body validation
 
-from slowapi import Limiter
-from slowapi.util import get_remote_address
-
 from app.core.config import settings
 from app.core.database import get_db, AsyncSessionLocal
+from app.core.limiter import limiter
 from app.dependencies.auth import get_current_user
 from app.models.user import User
 from app.models.translator import TranslationJob, TranslationPage
@@ -23,7 +21,6 @@ from app.schemas.translator import JobResponse, JobDetailResponse
 from app.services import translator_service
 
 router = APIRouter()
-limiter = Limiter(key_func=get_remote_address)
 
 # Magic bytes definitions for strict file validation
 MAGIC_BYTES = {
@@ -89,14 +86,17 @@ async def upload_file(
             await out_file.write(content)
 
     job = await translator_service.update_job_file_path(db, job.id, str(file_path))
+    # Set engine and persist in a single commit
     job.engine = engine
     await db.commit()
 
-    if engine == "ocr_llm":
-        background_tasks.add_task(translator_service.process_job, job.id, db)
-    elif engine == "vision":
+    # All background tasks create their own DB sessions internally.
+    # Never pass a request-scoped `db` to a background task — it will be
+    # closed/disposed by FastAPI before the task runs.
+    if engine == "vision":
         background_tasks.add_task(translator_service.process_job_vision, job.id)
     else:
+        # Both "pipeline" and legacy "ocr_llm" use the same pipeline.
         background_tasks.add_task(translator_service.process_job_pipeline, job.id)
 
     return job
@@ -315,12 +315,11 @@ async def retranslate_job(
 ):
     job = await translator_service.reset_job_for_retranslation(db, current_user.id, job_id)
     
-    if job.engine == "pipeline":
-        background_tasks.add_task(translator_service.process_job_pipeline, job.id)
-    elif job.engine == "vision":
+    if job.engine == "vision":
         background_tasks.add_task(translator_service.process_job_vision, job.id)
     else:
-        background_tasks.add_task(translator_service.process_job, job.id, db)
+        # Both "pipeline" and legacy "ocr_llm" use the same pipeline.
+        background_tasks.add_task(translator_service.process_job_pipeline, job.id)
         
     return job
 
@@ -383,11 +382,18 @@ async def get_translated_page(
 
 @router.get("/jobs/{job_id}/download")
 async def download_translated_job(
-    job_id: str,
+    job_id: UUID,  # Fixed: was str, now UUID to match all other endpoints
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    zip_stream = await translator_service.create_zip_stream(db, current_user.id, job_id)
+    # Verify ownership before streaming
+    job = await db.get(TranslationJob, job_id)
+    if not job or job.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Fixed: was called with (db, user_id, job_id) — wrong order & count.
+    # Correct signature: create_zip_stream(job_id, db)
+    zip_stream = translator_service.create_zip_stream(job_id, db)
     return StreamingResponse(
         zip_stream,
         media_type="application/zip",

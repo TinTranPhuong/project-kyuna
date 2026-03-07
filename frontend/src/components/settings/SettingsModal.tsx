@@ -160,15 +160,12 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
   // --- Handlers: Appearance & Account ---
   const setCustomWallpaper = useSettingsStore(state => state.setCustomWallpaper);
+  const uploadWallpaper = useSettingsStore(state => state.uploadWallpaper);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setCustomWallpaper(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+      void uploadWallpaper(file);
     }
   };
 

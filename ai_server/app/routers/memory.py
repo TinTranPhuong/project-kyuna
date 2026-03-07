@@ -40,27 +40,37 @@ async def extract_memory(request: ExtractionRequest):
 
     prompt_messages = [
         {"role": "system", "content": EXTRACTION_SYSTEM},
-        {"role": "user",   "content": f"Conversation:\n{conv_str}"}
+        {"role": "user",   "content": f"Here is the conversation history:\n\n{conv_str}\n\nTask:\nNow, output the extracted facts as a JSON array as instructed above. Do NOT converse. Output ONLY the JSON."}
     ]
-
     raw_output = ""
     try:
-        async for token in model_manager.stream(prompt_messages, max_tokens=512, temperature=0.1):
+        async for token in model_manager.generate_stream(prompt_messages, max_tokens=2048, temperature=0.1):
             raw_output += token
     except Exception as e:
         logger.error(f"[Extraction] LLM call failed: {e}")
         return ExtractionResponse(facts=[])
 
-    # Parse JSON — the only output should be a JSON array
+    # Parse JSON from "Thinking" models which might output a lot of text before the JSON
     try:
-        raw_output = raw_output.strip()
-        # Strip any accidental markdown code fences
-        if raw_output.startswith("```"):
-            raw_output = raw_output.split("```")[1]
-            if raw_output.lower().startswith("json"):
-                raw_output = raw_output[4:]
+        # Strip DeepSeek/Qwen thinking process
+        if "</think>" in raw_output:
+            raw_output = raw_output.split("</think>")[-1].strip()
+
+        # Look for a JSON code block first
+        import re
+        json_match = re.search(r"```(?:json)?\s*(\[[\s\S]*?\])\s*```", raw_output, re.IGNORECASE)
+        if json_match:
+            json_text = json_match.group(1).strip()
+        else:
+            # Fallback: look for a JSON array of objects using brackets
+            start_idx = raw_output.find('[')
+            end_idx = raw_output.rfind(']')
+            if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                json_text = raw_output[start_idx:end_idx+1]
+            else:
+                json_text = raw_output
         
-        facts = json.loads(raw_output)
+        facts = json.loads(json_text)
         if not isinstance(facts, list):
             facts = []
 

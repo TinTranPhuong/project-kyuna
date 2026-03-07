@@ -33,7 +33,8 @@ interface SettingsState {
   syncFromBackend: () => Promise<void>
   setTheme: (theme: ThemeType) => void
   setFontSize: (size: number) => void
-  setCustomWallpaper: (dataUrl: string | null) => void
+  setCustomWallpaper: (urlOrNull: string | null) => void
+  uploadWallpaper: (file: File) => Promise<void>
   setMusicUrl: (url: string) => void
   setMusicGroups: (groups: MusicGroup[]) => void
   setPomodoroWork: (min: number) => void
@@ -101,10 +102,16 @@ export const useSettingsStore = create<SettingsState>()(
       syncFromBackend: async () => {
         try {
           const s = await settingsService.get()
+          // If wallpaper is a relative path from the backend (/api/v1/...), prepend API base URL
+          const rawWp = s.custom_wallpaper ?? null
+          const resolvedWp = rawWp && rawWp.startsWith('/api/')
+            ? `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}${rawWp}`
+            : rawWp
+
           const next = {
             theme:              (s.theme as ThemeType)   ?? DEFAULTS.theme,
             fontSize:           s.font_size              ?? DEFAULTS.fontSize,
-            customWallpaper:    s.custom_wallpaper        ?? null,
+            customWallpaper:    resolvedWp,
             musicUrl:           s.music_url              ?? DEFAULTS.musicUrl,
             musicGroups:        s.music_groups           ?? DEFAULTS.musicGroups,
             pomodoroWork:       s.pomodoro_work_minutes  ?? DEFAULTS.pomodoroWork,
@@ -137,9 +144,24 @@ export const useSettingsStore = create<SettingsState>()(
         void sync({ font_size: clamped })
       },
 
-      setCustomWallpaper: (dataUrl) => {
-        set({ customWallpaper: dataUrl })
-        void sync({ custom_wallpaper: dataUrl })
+      setCustomWallpaper: (urlOrNull) => {
+        set({ customWallpaper: urlOrNull })
+        // Only sync the DB column if we're clearing (null).
+        // File uploads are handled by uploadWallpaper() which sets the DB itself.
+        if (urlOrNull === null) {
+          void settingsService.deleteWallpaper().catch(() => {})
+        }
+      },
+
+      uploadWallpaper: async (file: File) => {
+        try {
+          const { url } = await settingsService.uploadWallpaper(file)
+          // Append the API base URL for the img src
+          const fullUrl = `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}${url}`
+          set({ customWallpaper: fullUrl })
+        } catch (err) {
+          console.error('[settingsStore] Wallpaper upload failed:', err)
+        }
       },
 
       setMusicUrl: (musicUrl) => {

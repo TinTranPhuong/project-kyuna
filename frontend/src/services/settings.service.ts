@@ -29,4 +29,21 @@ export const settingsService = {
     const res = await axiosInstance.patch<BackendSettings>('/api/v1/users/me/settings', data)
     return res.data
   },
+
+  /** Upload wallpaper image file — returns { url } */
+  uploadWallpaper: async (file: File): Promise<{ url: string }> => {
+    const formData = new FormData()
+    formData.append('file', file)
+    const res = await axiosInstance.post<{ url: string }>(
+      '/api/v1/users/me/wallpaper',
+      formData,
+      { headers: { 'Content-Type': undefined } }
+    )
+    return res.data
+  },
+
+  /** Remove wallpaper from server */
+  deleteWallpaper: async (): Promise<void> => {
+    await axiosInstance.delete('/api/v1/users/me/wallpaper')
+  },
 }

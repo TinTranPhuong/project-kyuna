@@ -1,0 +1,11 @@
+{
+    "liveServer.settings.multiRootWorkspaceName": "project-kyuna",
+    "python.defaultInterpreterPath": "${workspaceFolder}/ai_server/venv/Scripts/python.exe",
+    "python.analysis.extraPaths": [
+        "./ai_server",
+        "./frontend",
+        "./backend",
+        "./ai_server/app/utils/comic-text-detector"
+    ],
+    "makefile.configureOnOpen": false
+}

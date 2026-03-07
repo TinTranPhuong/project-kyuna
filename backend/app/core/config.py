@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     # ── Services ──────────────────────────────────────────────────────────────
     AI_SERVER_URL: str = "http://localhost:8001"
     UPLOAD_DIR: str = "./uploads"
+    WALLPAPER_DIR: str = "./uploads/wallpapers"
     MAX_UPLOAD_SIZE_MB: int = 100
 
     # ── CORS ──────────────────────────────────────────────────────────────────

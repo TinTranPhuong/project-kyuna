@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 EXTRACTION_PROMPT = """Analyze this conversation. Extract facts worth remembering about the USER.
 Output ONLY valid JSON. No explanation. No markdown code blocks.
-Format: [{"subject":"user","predicate":"...","object":"...","raw":"...","confidence":0.0}]
+Format: [{{"subject":"user","predicate":"...","object":"...","raw":"...","confidence":0.0}}]
 
 Rules:
 - Only facts about the USER, not the assistant
@@ -74,26 +74,24 @@ async def run_extraction(conversation_id: UUID, user_id: UUID) -> None:
             # 4. POST to AI Server
             facts = []
             try:
+                # Format messages for the AI server
+                payload = {
+                    "messages": [{"role": m.role.lower(), "content": m.content} for m in msgs]
+                }
                 response = await ai_client.client.post(
                     "/v1/memory/extract",
-                    json={"prompt": prompt},
+                    json=payload,
                     timeout=60.0
                 )
                 response.raise_for_status()
-                response_text = response.json().get("text", "[]").strip()
                 
-                # Strip markdown blocks if the LLM disobeyed instructions
-                if response_text.startswith("```json"):
-                    response_text = response_text[7:]
-                if response_text.startswith("```"):
-                    response_text = response_text[3:]
-                if response_text.endswith("```"):
-                    response_text = response_text[:-3]
-                    
-                facts = json.loads(response_text.strip())
+                # The AI server already parses JSON and returns a structured array of facts
+                data = response.json()
+                facts = data.get("facts", [])
+                
                 if not isinstance(facts, list):
                     facts = []
-            except (json.JSONDecodeError, Exception) as ai_err:
+            except Exception as ai_err:
                 logger.warning(f"[Extraction] LLM returned malformed JSON or failed: {ai_err}")
                 facts = [] # Malformed JSON -> 0 facts, no crash
 
@@ -109,10 +107,12 @@ async def run_extraction(conversation_id: UUID, user_id: UUID) -> None:
             logger.info(f"[Extraction] Job {job_id} complete. Extracted {saved_count} new facts.")
 
         except Exception as e:
-            logger.error(f"[Extraction] Fatal error in worker: {e}")
+            import traceback
+            logger.error(f"[Extraction] Fatal error in worker: {e}\n{traceback.format_exc()}")
             new_job.status = "failed"
             new_job.error = str(e)
             new_job.completed_at = datetime.now(timezone.utc)
+            await db.commit()
             await db.commit()
 
 
