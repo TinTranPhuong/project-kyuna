@@ -1,5 +1,6 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Caveat+Brush&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -52,11 +53,12 @@
            text-white font-medium px-4 py-2;
   }
 
-  /* Primary action button — high-contrast primary teal brand color */
+  /* Primary action button — high-contrast pink-cyan gradient */
   .btn-primary {
-    @apply bg-primary-600 hover:bg-primary-700 text-white font-semibold 
-           px-6 py-2.5 rounded-xl transition-all duration-200 
-           shadow-lg shadow-primary-900/50 active:scale-95;
+    @apply bg-gradient-to-r from-primary-500 to-secondary-500 hover:from-primary-600 hover:to-secondary-600 
+           text-white font-semibold border-none
+           px-6 py-2.5 rounded-xl transition-all duration-300 
+           shadow-lg shadow-primary-500/30 active:scale-95;
   }
 
   /* Form input specifically designed for glass backgrounds */

@@ -31,7 +31,7 @@ export const TimerDisplay = () => {
   const { label, color } = phaseConfig[phase] || phaseConfig.work;
 
   // 3. Calculate SVG Circle Math
-  const radius = 140; // Size of the ring
+  const radius = 140; 
   const circumference = 2 * Math.PI * radius;
   // Ensure we don't divide by zero if totalTime somehow glitches
   const percentRemaining = totalTime > 0 ? timeLeft / totalTime : 0;

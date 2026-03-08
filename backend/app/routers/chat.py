@@ -24,10 +24,9 @@ router = APIRouter()
 async def create_conversation(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-    data: CreateConversationRequest = None,  # Make the body completely optional
+    data: CreateConversationRequest = None, 
 ):
     """Initialize a new chat conversation."""
-    # If the frontend sent no body at all, initialize a default empty request
     if data is None:
         data = CreateConversationRequest()
         
@@ -58,7 +57,7 @@ async def get_conversation(
 @router.patch("/conversations/{conversation_id}", response_model=ConversationResponse)
 async def update_conversation(
     conversation_id: UUID,
-    data: CreateConversationRequest, # Reusing schema for title/prompt updates
+    data: CreateConversationRequest, 
     is_archived: bool = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -81,7 +80,7 @@ async def delete_conversation(
 
 @router.post("/conversations/{conversation_id}/messages")
 async def send_message(
-    conversation_id: UUID,  # <-- FastAPI will now auto-convert the string to a UUID object!
+    conversation_id: UUID, 
     request: Request,
     data: ChatMessageRequest,
     current_user: User = Depends(get_current_user),
@@ -90,11 +89,10 @@ async def send_message(
     """
     Send a message and stream the AI's response via Server-Sent Events (SSE).
     """
-    # 1 & 2: Verify access and save user's message
+    # Verify access and save user's message
     await chat_service.verify_and_save_user_message(db, current_user.id, conversation_id, data)
-
-    # 3, 4, 5, 6, 7 & 8: The generator function handles building history, 
-    # proxying the AI server stream, yielding SSE, and saving the final result.
+ 
+    # Proxying the AI server stream, yielding SSE, and saving the final result.
     return StreamingResponse(
         chat_service.stream_chat_response(db, current_user.id, conversation_id, data.model_used),
         media_type="text/event-stream"

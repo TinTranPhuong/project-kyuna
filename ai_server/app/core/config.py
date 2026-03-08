@@ -17,13 +17,13 @@ class AISettings(BaseSettings):
     MODELS_DIR: str = "./models"
     MIN_CONFIDENCE: float = 0
     N_GPU_LAYERS: int = -1
-    N_CTX: int = 4096
+    N_CTX: int = 8192
     N_THREADS: int = 8
     MAX_CONCURRENT_REQUESTS: int = 3
     PORT: int = 8001
 
     # Generation defaults — loaded from .env
-    MAX_TOKENS: int = 2048
+    MAX_TOKENS: int = 8192
     TEMPERATURE: float = 0.7
     TOP_P: float = 0.9
     TOP_K: int = 40
@@ -43,6 +43,6 @@ class AISettings(BaseSettings):
 
 settings = AISettings()
 
-# Debug: print on startup so you can confirm the path is correct
+# Print on startup so you can confirm the path is correct
 print(f"[Config] Loading .env from: {_ENV_FILE}")
 print(f"[Config] MAX_TOKENS={settings.MAX_TOKENS}  N_CTX={settings.N_CTX}  CHAT_MODEL={settings.CHAT_MODEL}")

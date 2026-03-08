@@ -49,7 +49,7 @@ export const ControlBar = () => {
 
   if (!activeJobId) return null;
 
-  // Check if current page has regions (completed)
+  // Check if current page has regions 
   const regions = pageRegions[currentPage] || [];
   const hasRegions = regions.length > 0;
 

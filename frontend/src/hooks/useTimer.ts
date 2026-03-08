@@ -32,7 +32,7 @@ export function useTimer() {
   const formattedTime = formatTime(timerState.timeLeft);
 
   return {
-    ...timerState, // Re-export all base state and actions (start, pause, skip, etc.)
+    ...timerState, 
     totalDuration,
     progressPercent,
     formattedTime,

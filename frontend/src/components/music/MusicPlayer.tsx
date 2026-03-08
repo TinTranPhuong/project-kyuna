@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Music, ListMusic, ChevronDown, ChevronRight } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Music, ListMusic, ChevronDown, ChevronRight, Shuffle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useSettingsStore, type MusicGroup } from '@/store/settingsStore';
 import { cn } from '@/lib/utils';
@@ -8,8 +8,8 @@ import YouTubeEmbed, { type YouTubePlayerRef } from './YouTubeEmbed';
 export const MusicPlayer = () => {
   const musicUrl = useSettingsStore(state => state.musicUrl);
   const setMusicUrl = useSettingsStore(state => state.setMusicUrl);
-  const musicGroups = useSettingsStore(state => state.musicGroups); 
-  
+  const musicGroups = useSettingsStore(state => state.musicGroups);
+
   const playerRef = useRef<YouTubePlayerRef>(null);
 
   const [isPlaying, setIsPlaying] = useState(false);
@@ -17,11 +17,14 @@ export const MusicPlayer = () => {
   const [currentTrackTitle, setCurrentTrackTitle] = useState('Kyuna Radio');
   const [channelName, setChannelName] = useState('Kyuna');
   const [thumbnail, setThumbnail] = useState('');
-  
+
   const [showPlaylists, setShowPlaylists] = useState(false);
-  
+
   // NEW: State to track which playlists are dropped down
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+
+  // NEW: Shuffle state
+  const [isShuffle, setIsShuffle] = useState(false);
 
   useEffect(() => {
     if (musicUrl) setIsPlaying(true);
@@ -42,41 +45,58 @@ export const MusicPlayer = () => {
     for (const group of musicGroups) {
       const currentIndex = group.links.findIndex(l => l.url === musicUrl);
       if (currentIndex !== -1) {
-        const nextIndex = (currentIndex + 1) % group.links.length;
+        let nextIndex;
+        if (isShuffle) {
+          nextIndex = Math.floor(Math.random() * group.links.length);
+        } else {
+          nextIndex = (currentIndex + 1) % group.links.length;
+        }
         setMusicUrl(group.links[nextIndex].url);
-        return; 
+        setIsPlaying(true);
+        setTimeout(() => playerRef.current?.play(), 300);
+        return;
       }
     }
     playerRef.current?.nextTrack?.();
+    setIsPlaying(true);
+    setTimeout(() => playerRef.current?.play(), 300);
   };
 
   const handleCustomPrev = () => {
     for (const group of musicGroups) {
       const currentIndex = group.links.findIndex(l => l.url === musicUrl);
       if (currentIndex !== -1) {
-        const prevIndex = currentIndex - 1 < 0 ? group.links.length - 1 : currentIndex - 1;
+        let prevIndex;
+        if (isShuffle) {
+          prevIndex = Math.floor(Math.random() * group.links.length);
+        } else {
+          prevIndex = currentIndex - 1 < 0 ? group.links.length - 1 : currentIndex - 1;
+        }
         setMusicUrl(group.links[prevIndex].url);
+        setIsPlaying(true);
+        setTimeout(() => playerRef.current?.play(), 300);
         return;
       }
     }
     playerRef.current?.prevTrack?.();
+    setIsPlaying(true);
+    setTimeout(() => playerRef.current?.play(), 300);
   };
 
-  // NEW: Accordion Toggle
+  // Accordion Toggle
   const toggleGroup = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setExpandedGroups(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
-  // THE FIX: Strict Auto-Play Triggers
+  // Strict Auto-Play Triggers
   const handlePlayGroup = (group: MusicGroup, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     if (group.links.length > 0) {
       setMusicUrl(group.links[0].url);
       setIsPlaying(true);
       setShowPlaylists(false);
-      // Forcefully sends a play command to bypass browser freezing
-      setTimeout(() => playerRef.current?.play(), 300); 
+      setTimeout(() => playerRef.current?.play(), 300);
     }
   };
 
@@ -84,22 +104,21 @@ export const MusicPlayer = () => {
     setMusicUrl(url);
     setIsPlaying(true);
     setShowPlaylists(false);
-    // Forcefully sends a play command to bypass browser freezing
-    setTimeout(() => playerRef.current?.play(), 300); 
+    setTimeout(() => playerRef.current?.play(), 300);
   };
 
   return (
     <div className="relative w-full flex items-center justify-between pointer-events-none">
-      
-      <YouTubeEmbed 
+
+      <YouTubeEmbed
         ref={playerRef}
-        url={musicUrl} 
-        isPlaying={isPlaying} 
+        url={musicUrl}
+        isPlaying={isPlaying}
         volume={volume}
         onStateChange={(state) => {
           if (state === 1) setIsPlaying(true);
           if (state === 2) setIsPlaying(false);
-          if (state === 0) handleCustomNext(); 
+          if (state === 0) handleCustomNext();
         }}
         onTrackInfo={(title, channel, thumb) => {
           setCurrentTrackTitle(title);
@@ -134,9 +153,9 @@ export const MusicPlayer = () => {
           "bg-black/30 backdrop-blur-2xl border border-white/10 rounded-full",
           "px-4 md:px-6 py-2 shadow-2xl"
         )}>
-          
+
           <div className="relative flex items-center justify-center">
-            <button 
+            <button
               onClick={() => setShowPlaylists(!showPlaylists)}
               className={cn(
                 "p-2 hover:text-white transition-colors rounded-full mr-1",
@@ -151,8 +170,8 @@ export const MusicPlayer = () => {
               {showPlaylists && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setShowPlaylists(false)} />
-                  
-                  <motion.div 
+
+                  <motion.div
                     initial={{ opacity: 0, y: 10, scale: 0.95 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: 10, scale: 0.95 }}
@@ -162,16 +181,16 @@ export const MusicPlayer = () => {
                     <div className="max-h-80 overflow-y-auto custom-scrollbar p-1">
                       {musicGroups.length === 0 ? (
                         <div className="px-3 py-4 text-xs text-white/40 text-center italic">
-                          No playlists yet.<br/>Create one in Settings!
+                          No playlists yet.<br />Create one in Settings!
                         </div>
                       ) : (
                         musicGroups.map(group => {
                           const isExpanded = expandedGroups[group.id];
                           return (
                             <div key={group.id} className="mb-2 last:mb-1 bg-white/5 rounded-xl overflow-hidden border border-white/5">
-                              
+
                               {/* --- Dropdown Accordion Header --- */}
-                              <div 
+                              <div
                                 onClick={(e) => toggleGroup(group.id, e)}
                                 className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-white/10 transition-colors select-none"
                               >
@@ -183,7 +202,7 @@ export const MusicPlayer = () => {
                                     {group.name} <span className="text-[10px] font-normal text-white/40 normal-case">({group.links.length})</span>
                                   </span>
                                 </div>
-                                <button 
+                                <button
                                   onClick={(e) => handlePlayGroup(group, e)}
                                   className="p-1.5 rounded-md text-white bg-primary-600 hover:bg-primary-500 shadow-sm transition-all shrink-0 ml-2"
                                   title={`Play ${group.name} from beginning`}
@@ -191,7 +210,7 @@ export const MusicPlayer = () => {
                                   <Play size={10} fill="currentColor" className="ml-0.5" />
                                 </button>
                               </div>
-                              
+
                               {/* --- Expanding Song List --- */}
                               <AnimatePresence>
                                 {isExpanded && (
@@ -208,7 +227,7 @@ export const MusicPlayer = () => {
                                         group.links.map(link => {
                                           const isActive = musicUrl === link.url;
                                           return (
-                                            <button 
+                                            <button
                                               key={link.id}
                                               onClick={() => handlePlaySong(link.url)}
                                               className={cn(
@@ -242,7 +261,7 @@ export const MusicPlayer = () => {
             </AnimatePresence>
           </div>
 
-          <button 
+          <button
             onClick={handleTogglePlay}
             className="w-10 h-10 flex items-center justify-center bg-white text-black rounded-full hover:scale-105 active:scale-95 transition-all shadow-md shrink-0"
           >
@@ -250,14 +269,24 @@ export const MusicPlayer = () => {
           </button>
 
           <div className="flex items-center gap-2 md:gap-3 text-white/60 shrink-0">
+            <button
+              onClick={() => setIsShuffle(!isShuffle)}
+              className={cn(
+                "hover:text-white transition-colors active:scale-95",
+                isShuffle && "text-primary-400 hover:text-primary-300"
+              )}
+              title="Toggle Shuffle"
+            >
+              <Shuffle size={14} strokeWidth={isShuffle ? 3 : 2} />
+            </button>
             <button onClick={handleCustomPrev} className="hover:text-white transition-colors active:scale-95"><SkipBack size={16} fill="currentColor" /></button>
             <button onClick={handleCustomNext} className="hover:text-white transition-colors active:scale-95"><SkipForward size={16} fill="currentColor" /></button>
           </div>
 
           <div className="w-px h-6 bg-white/10 mx-1 hidden md:block shrink-0"></div>
 
-          <button 
-            onClick={() => handleVolumeChange(volume === 0 ? 50 : 0)} 
+          <button
+            onClick={() => handleVolumeChange(volume === 0 ? 50 : 0)}
             className="text-white/60 hover:text-white transition-colors shrink-0"
           >
             {volume === 0 ? <VolumeX size={16} /> : <Volume2 size={16} />}

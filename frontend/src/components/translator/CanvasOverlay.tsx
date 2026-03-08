@@ -50,24 +50,24 @@ export function CanvasOverlay({ regions, imageWidth, imageHeight, visible }: Can
       if (!region.bbox) continue
 
       const [x1, y1, x2, y2] = region.bbox
-      
+
       // Calculate dimensions in display pixels
       const dx = x1 * scaleX
       const dy = y1 * scaleY
       const dw = (x2 - x1) * scaleX
       const dh = (y2 - y1) * scaleY
-      
+
       const cx = dx + dw / 2
       const cy = dy + dh / 2
 
       // -- A. Draw White "Bubble" Background --
       // Using a rounded rectangle looks more natural than a sharp box
-      const radius = Math.min(dw, dh) * 0.2 // 20% rounding
+      const radius = Math.min(dw, dh) * 0.2
       ctx.beginPath()
       ctx.roundRect(dx, dy, dw, dh, radius)
       ctx.fillStyle = 'white'
       ctx.fill()
-      
+
       // -- B. Text Fitting Engine --
       const text = region.english || ''
       if (!text) continue
@@ -84,7 +84,7 @@ export function CanvasOverlay({ regions, imageWidth, imageHeight, visible }: Can
       let lines: string[] = []
 
       while (fontSize >= minFontSize) {
-        ctx.font = `${fontSize}px "Comic Sans MS", "Noto Sans", sans-serif` // "Comic Sans" is standard for manga!
+        ctx.font = `${fontSize}px "Comic Sans MS", "Noto Sans", sans-serif`
         const words = text.split(' ')
         lines = []
         let currentLine = words[0]
@@ -93,7 +93,7 @@ export function CanvasOverlay({ regions, imageWidth, imageHeight, visible }: Can
         for (let i = 1; i < words.length; i++) {
           const word = words[i]
           const width = ctx.measureText(currentLine + " " + word).width
-          if (width < dw * 0.9) { // 90% width safety margin
+          if (width < dw * 0.9) {
             currentLine += " " + word
           } else {
             lines.push(currentLine)
@@ -104,11 +104,11 @@ export function CanvasOverlay({ regions, imageWidth, imageHeight, visible }: Can
 
         // Check if total height fits
         const totalHeight = lines.length * (fontSize * lineHeightMultiplier)
-        if (totalHeight <= dh * 0.95) { 
+        if (totalHeight <= dh * 0.95) {
           // It fits! Break the loop and draw
-          break 
+          break
         }
-        
+
         // If not, shrink font and try again
         fontSize -= 1
       }
@@ -120,8 +120,8 @@ export function CanvasOverlay({ regions, imageWidth, imageHeight, visible }: Can
       let startY = cy - (blockHeight / 2) + (lineHeight / 2)
 
       // Use the final calculated font
-      ctx.font = `${fontSize}px "Comic Sans MS", "Noto Sans", sans-serif` 
-      
+      ctx.font = `${fontSize}px "Comic Sans MS", "Noto Sans", sans-serif`
+
       lines.forEach((line, i) => {
         ctx.fillText(line, cx, startY + (i * lineHeight))
       })

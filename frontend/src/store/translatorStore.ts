@@ -1,8 +1,6 @@
 import { create } from 'zustand';
 import { translatorService } from '@/services/translator.service';
-import type { TranslationJob, TranslationJobDetail } from '@/types/translator.types';
-
-export type OverlayMode = 'dots' | 'text' | 'original';
+import type { TranslationJob, TranslationJobDetail, OverlayMode } from '@/types/translator.types';
 
 interface TranslatorState {
   jobs: TranslationJob[];
@@ -15,11 +13,9 @@ interface TranslatorState {
   targetLanguage: string;
   showOriginal: boolean;
 
-  // Fields PageViewer reads — were missing, causing blank page crash
   overlayMode: OverlayMode;
-  pageRegions: Record<number, any[]>;  // keyed by page number
+  pageRegions: Record<number, any[]>;
 
-  // Actions
   loadJobs: () => Promise<void>;
   uploadFile: (file: File, onProgress?: (percent: number) => void) => Promise<void>;
   selectJob: (id: string) => void;
@@ -29,6 +25,7 @@ interface TranslatorState {
   goToPage: (n: number) => void;
   retranslate: (id: string) => Promise<void>;
   downloadZip: (id: string) => Promise<void>;
+  renameJob: (id: string, name: string) => Promise<void>;
   deleteJob: (id: string) => Promise<void>;
   toggleShowOriginal: () => void;
   setSourceLanguage: (lang: string) => void;
@@ -46,8 +43,8 @@ export const useTranslatorStore = create<TranslatorState>((set, get) => ({
   sourceLanguage: 'auto',
   targetLanguage: 'en',
   showOriginal: false,
-  overlayMode: 'dots',      // default overlay — dots mode
-  pageRegions: {},           // populated by pollJobStatus when job completes
+  overlayMode: 'dots',
+  pageRegions: {},
 
   loadJobs: async () => {
     try {
@@ -76,7 +73,6 @@ export const useTranslatorStore = create<TranslatorState>((set, get) => ({
         pageRegions: {},
       }));
 
-      // Fetch full detail immediately so totalPages is accurate
       get().pollJobStatus(newJob.id);
 
     } catch (error) {
@@ -100,7 +96,6 @@ export const useTranslatorStore = create<TranslatorState>((set, get) => ({
     try {
       const detail: TranslationJobDetail = await translatorService.getJob(id);
 
-      // Extract regions per page from detail.pages so PageViewer can use them
       const pageRegions: Record<number, any[]> = {};
       if (detail.pages) {
         for (const page of detail.pages) {
@@ -164,6 +159,17 @@ export const useTranslatorStore = create<TranslatorState>((set, get) => ({
       URL.revokeObjectURL(url);
     } catch (error) {
       console.error('Download failed', error);
+    }
+  },
+
+  renameJob: async (id, name) => {
+    try {
+      const updatedJob = await translatorService.renameJob(id, name);
+      set((state) => ({
+        jobs: state.jobs.map((j) => (j.id === id ? { ...j, original_filename: updatedJob.original_filename } : j)),
+      }));
+    } catch (error) {
+      console.error('Rename failed', error);
     }
   },
 

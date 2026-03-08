@@ -12,13 +12,13 @@ interface UsePhaseStreamResult {
 }
 
 const STAGE_NAMES = [
-  '',                                      // 0 - unused
-  'Detecting text regions',                // 1
-  'Cropping bubbles',                      // 2
-  'Reading Japanese text',                 // 3
-  'Hangoff Protocol - loading Qwen 35B',   // 4
-  'Translating with Qwen 35B',             // 5
-  'Complete',                              // 6
+  '',                                   
+  'Detecting text regions',                
+  'Cropping bubbles',                      
+  'Reading Japanese text',                 
+  'Hangoff Protocol - loading model',   
+  'Translating with model',             
+  'Complete',                              
 ]
 
 function initialPhases(): PhaseState[] {
@@ -44,10 +44,8 @@ export function usePhaseStream(
   const token = useAuthStore(s => s.token)
   const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
-  // If regions are already cached (job was completed before component mounted)
   useEffect(() => {
     if (cachedRegions && cachedRegions.length > 0) {
-      // THE FIX: Add 'unknown' to safely bridge the incompatible types
       setRegions(cachedRegions as unknown as PipelineRegion[])
       setPhases(initialPhases().map(p => ({ ...p, status: 'done' })))
       setIsDone(true)
@@ -55,10 +53,8 @@ export function usePhaseStream(
   }, [cachedRegions])
 
   useEffect(() => {
-    // Skip network connection if we already have the regions cached
     if (!jobId || (cachedRegions && cachedRegions.length > 0)) return
 
-    // Reset state when job/page changes
     setPhases(initialPhases())
     setRegions([])
     setIsDone(false)
@@ -74,7 +70,7 @@ export function usePhaseStream(
           {
             headers: {
               Authorization: `Bearer ${token}`,
-              'Cache-Control': 'no-cache', // Required per SSE rules
+              'Cache-Control': 'no-cache', 
             }
           }
         )
@@ -103,7 +99,6 @@ export function usePhaseStream(
               if ('waiting' in event) continue
 
               if ('stage' in event) {
-                // Handle Stage 6 (Complete)
                 if (event.stage === 6 && event.status === 'done') {
                   const stage6Event = event as { stage: 6; name: 'Complete'; status: 'done'; regions: PipelineRegion[] }
                   setRegions(stage6Event.regions)
@@ -113,7 +108,6 @@ export function usePhaseStream(
                   return
                 }
 
-                // Handle Failure
                 if (event.stage === 0 && event.status === 'failed') {
                   const failedEvent = event as { stage: 0; name: 'Failed'; status: 'failed'; error: string }
                   setIsFailed(true)
@@ -122,7 +116,6 @@ export function usePhaseStream(
                   return
                 }
 
-                // Parse detail string if progress tracking fields are present
                 let detailText: string | undefined = undefined
                 if ('region_count' in event && event.region_count !== undefined) {
                   detailText = `${event.region_count} bubbles`
@@ -130,7 +123,6 @@ export function usePhaseStream(
                   detailText = `${event.done}/${event.total} bubbles`
                 }
 
-                // Update the specific stage
                 setPhases(prev => prev.map(p =>
                   p.stage === event.stage
                     ? { ...p, status: event.status === 'running' ? 'running' : 'done', detail: detailText }
@@ -138,12 +130,11 @@ export function usePhaseStream(
                 ))
               }
             } catch {
-              // Skip malformed JSON lines
             }
           }
         }
       } catch {
-        // Connection closed - job may have completed; do not set error state
+        
       }
     }
 

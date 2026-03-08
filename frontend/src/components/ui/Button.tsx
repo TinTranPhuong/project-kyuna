@@ -74,5 +74,4 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
 
 Button.displayName = 'Button';
 
-// Fulfills the "Export as default AND as named export" requirement
 export default Button;

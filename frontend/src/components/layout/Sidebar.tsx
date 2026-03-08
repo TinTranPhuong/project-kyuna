@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
-  Home, MessageSquare, BarChart2, Brain, Wrench, type LucideIcon, 
+  Home, MessageSquare, Brain, Wrench, type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import Tooltip from '@/components/ui/Tooltip';
@@ -15,20 +15,18 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { icon: Home,         label: 'Home Page', path: '/'          },
-  { icon: MessageSquare,label: 'Chat',      path: '/chat'      },
-  { icon: BarChart2,    label: 'Dashboard', path: '/dashboard' },
-  { icon: Wrench,       label: 'Tools',     path: '/tools'     }, 
-  { icon: Brain,        label: 'Memory',    path: '/memory'    },
-
-  // --- PRESERVED OLD CODE ---
+  { icon: Home, label: 'Home Page', path: '/' },
+  { icon: MessageSquare, label: 'Chat', path: '/chat' },
+  // { icon: BarChart2,    label: 'Dashboard', path: '/dashboard' }, 
+  { icon: Wrench, label: 'Tools', path: '/tools' },
+  { icon: Brain, label: 'Memory', path: '/memory' },
   //{ icon: Languages,    label: 'Translate', path: '/translate' },
 ];
 
 export const Sidebar = () => {
   const [isHovered, setIsHovered] = useState(false);
   // const setManagerOpen = useNoteStore(state => state.setManagerOpen);
-  const isExpanded = isHovered; 
+  const isExpanded = isHovered;
 
   return (
     <motion.aside
@@ -51,7 +49,6 @@ export const Sidebar = () => {
             <SidebarLink key={item.path} item={item} isExpanded={isExpanded} />
           ))}
 
-          {/* --- PRESERVED OLD CODE (Notes Button moved to Tools Page) --- */}
           {/* <Tooltip content="Notes" position="right" className={isExpanded ? 'hidden' : ''}>
             <button
               onClick={() => setManagerOpen(true)}
@@ -99,9 +96,9 @@ const SidebarLink = ({ item, isExpanded }: SidebarLinkProps) => (
     >
       <item.icon size={18} className="shrink-0" />
       {isExpanded && (
-        <motion.span 
-          initial={{ opacity: 0, x: -10 }} 
-          animate={{ opacity: 1, x: 0 }} 
+        <motion.span
+          initial={{ opacity: 0, x: -10 }}
+          animate={{ opacity: 1, x: 0 }}
           className="ml-3 font-medium text-sm whitespace-nowrap overflow-hidden text-ellipsis flex-1 text-left"
         >
           {item.label}

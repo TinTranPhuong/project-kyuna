@@ -1,11 +1,7 @@
 # ══════════════════════════════════════════════════════════════════════════
 #  PIPELINE TRANSLATOR DEPENDENCIES (Phase 1)
 # ══════════════════════════════════════════════════════════════════════════
-
-# 1. Japanese OCR
 manga-ocr>=0.1.14
-
-# 2. comic-text-detector dependencies
 wandb
 torchsummary
 pandas
@@ -19,15 +15,13 @@ easyocr
 Pillow
 numpy
 nvidia-ml-py
-
-# 🚨 CRITICAL DOWNGRADE: Prevents "module 'numpy' has no attribute 'bool8'" crash
 numpy<2.0.0
 
 # Custom CUDA 13.0 Wheel with Qwen3 Vision Support for Python 3.11
-llama_cpp_python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.27-cu130-Basic-win-20260223/llama_cpp_python-0.3.27+cu130.basic-cp311-cp311-win_amd64.whl
+# llama_cpp_python @ https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.27-cu130-Basic-win-20260223/llama_cpp_python-0.3.27+cu130.basic-cp311-cp311-win_amd64.whl
 
 # ══════════════════════════════════════════════════════════════════════════
-# 🚨 PYTORCH INSTALLATION WARNING 
+# PYTORCH INSTALLATION WARNING 
 # ══════════════════════════════════════════════════════════════════════════
 # DO NOT let pip install standard PyTorch from this file!
 # To bypass CVE-2025-32434 and fix the "no kernel image" error on CUDA 13.1, 

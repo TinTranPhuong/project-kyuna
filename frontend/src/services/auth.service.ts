@@ -1,7 +1,6 @@
 import axiosInstance from '@/lib/axios'
 import type { User, LoginResponse } from '@/types/auth.types'
 
-// Re-export so callers can import types from one place
 export type { User, LoginResponse }
 
 /**
@@ -41,15 +40,12 @@ export const authService = {
     return response.data
   },
 
-  /** POST /api/v1/auth/logout — signals backend to invalidate the refresh token */
+  /** POST /api/v1/auth/logout */
   logout: async (): Promise<void> => {
     await axiosInstance.post('/api/v1/auth/logout')
   },
 
-  /**
-   * POST /api/v1/auth/refresh
-   * Normally called by the axios interceptor on 401 — not by components directly.
-   */
+  /** POST /api/v1/auth/refresh */
   refreshToken: async (refreshToken: string): Promise<{ access_token: string }> => {
     const response = await axiosInstance.post<{ access_token: string }>(
       '/api/v1/auth/refresh',
@@ -58,10 +54,7 @@ export const authService = {
     return response.data
   },
 
-  /**
-   * GET /api/v1/auth/me
-   * Called by authStore.initialize() on app start to validate a stored token.
-   */
+  /** GET /api/v1/auth/me */
   getMe: async (): Promise<User> => {
     const response = await axiosInstance.get<User>('/api/v1/auth/me')
     return response.data
@@ -71,20 +64,13 @@ export const authService = {
   // Spec: backend/app/routers/users.py → PATCH /me, PATCH /me/password, DELETE /me
   // These are NOT under /auth — they live under the separate users router.
 
-  /**
-   * PATCH /api/v1/users/me
-   * Updates mutable profile fields (currently only username).
-   */
+  /** PATCH /api/v1/users/me */
   updateProfile: async (data: { username?: string }): Promise<User> => {
     const response = await axiosInstance.patch<User>('/api/v1/users/me', data)
     return response.data
   },
 
-  /**
-   * PATCH /api/v1/users/me/password
-   * Requires current password for verification on the backend.
-   * Uses PATCH (not POST) — matches the users router spec.
-   */
+  /** PATCH /api/v1/users/me/password */
   changePassword: async (
     currentPassword: string,
     newPassword: string,
@@ -95,12 +81,7 @@ export const authService = {
     })
   },
 
-  /**
-   * DELETE /api/v1/users/me
-   * Permanently deletes the account and all associated data.
-   * Axios DELETE with a body requires the `data` config key.
-   * Uses DELETE (not POST) — matches the users router spec.
-   */
+  /** DELETE /api/v1/users/me */
   deleteAccount: async (password: string): Promise<void> => {
     await axiosInstance.delete('/api/v1/users/me', { data: { password } })
   },

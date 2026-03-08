@@ -4,7 +4,8 @@ import json
 import asyncio
 import platform
 import logging
-import torch # type: ignore
+import torch 
+from pathlib import Path
 
 from app.services.ocr_pipeline_service import ocr_pipeline_service
 from app.services.model_manager import model_manager
@@ -23,54 +24,40 @@ def _windows_force_vram_release() -> None:
     
     try:
         import ctypes
-        # -1, -1 forces the OS to aggressively swap out unused memory pages
         ctypes.windll.kernel32.SetProcessWorkingSetSize(-1, -1, -1)
         logger.info("Windows OS-level VRAM release triggered.")
     except Exception as e:
         logger.warning(f"Failed to force Windows VRAM release: {e}")
-        pass   # best-effort — do not crash the pipeline if ctypes fails
+        pass   
 
 
 async def hangoff_protocol() -> None:
     """
-    Stage 4: Unload PyTorch models, force OS-level VRAM reclaim (Windows),
-    then load Qwen 35B / OpenAI 20B via llama.cpp.
+    Unload PyTorch models, force OS-level VRAM reclaim (Windows),
     Call only after all OCR pipeline work is complete.
     """
     logger.info("Executing Hangoff Protocol...")
-    
-    # Unload both detector + OCR models in one call
     ocr_pipeline_service.unload()
     
-    # Standard PyTorch cache flush
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-        torch.cuda.synchronize()
-        
+        torch.cuda.synchronize()   
     gc.collect()
     
     # ── Windows VRAM Ghost Memory Fix ────────────────────────────────────────
-    # On Windows, PyTorch's empty_cache() marks the memory as free internally
-    # but does NOT yield it back to the OS. llama.cpp then fails to get a
-    # contiguous 22GB block for the LLM and throws CUDA OOM.
-    # _windows_force_vram_release() calls Win32 SetProcessWorkingSetSize via
-    # ctypes to force the OS to actually reclaim the pages.
-    # This is a no-op on Linux/macOS — safe to call unconditionally.
     _windows_force_vram_release()
     
     translation_model = getattr(settings, "TRANSLATION_MODEL", None)
     if not translation_model:
         raise RuntimeError(
             "TRANSLATION_MODEL is not set in .env. "
-            "Set it to your LLM GGUF filename (e.g. OpenAI-20B-NEOPlus-Uncensored-IQ4_NL.gguf)."
+            "Set it to your LLM GGUF filename."
         )
         
     await model_manager.load_model(translation_model)
     logger.info("Hangoff Protocol complete. Translation model loaded.")
 
-
 def _merge_translations(parsed: list[dict], originals: list[dict]) -> list[dict]:
-    """Merge by index. Missing entries get empty english string."""
     translation_map = {item["index"]: item.get("english", "") for item in parsed if "index" in item}
     return [{**r, "english": translation_map.get(r.get("index"), "")} for r in originals]
 
@@ -82,12 +69,11 @@ def _parse_translation_response(response: str, original_regions: list[dict]) -> 
     LLMs output ```json ... ``` blocks ~50% of the time
     even with an explicit "no fences" instruction in the prompt.
     """
-    # ── Step 0: Strip markdown fences (ALWAYS run first) ─────────────────────
-    # Handles: ```json\n...\n``` and ```\n...\n``` and stray ``` anywhere
+    # Strip markdown fences (ALWAYS run first) ─────────────────────
     cleaned = re.sub(r"```(?:json)?\s*", "", response)
     cleaned = cleaned.replace("```", "").strip()
     
-    # ── Strategy 1: Direct parse of cleaned response ──────────────────────────
+    # Direct parse of cleaned response ──────────────────────────
     try:
         parsed = json.loads(cleaned)
         if isinstance(parsed, list) and len(parsed) > 0:
@@ -95,7 +81,7 @@ def _parse_translation_response(response: str, original_regions: list[dict]) -> 
     except json.JSONDecodeError:
         pass
         
-    # ── Strategy 2: Find first '[' and last ']' in cleaned text ──────────────
+    # Find first '[' and last ']' in cleaned text ──────────────
     start = cleaned.find("[")
     end   = cleaned.rfind("]") + 1
     
@@ -107,7 +93,7 @@ def _parse_translation_response(response: str, original_regions: list[dict]) -> 
         except json.JSONDecodeError:
             pass
             
-    # ── Strategy 3: Parse line-by-line for individual JSON objects ────────────
+    # Parse line-by-line for individual JSON objects ────────────
     partial = []
     for line in cleaned.splitlines():
         line = line.strip().rstrip(",")
@@ -122,7 +108,7 @@ def _parse_translation_response(response: str, original_regions: list[dict]) -> 
     if partial:
         return _merge_translations(partial, original_regions)
         
-    # ── Strategy 4: Return originals with empty english (do not fail the job) ─
+    # Return originals with empty english (do not fail the job) ─
     logger.warning(
         "Translation response could not be parsed after fence stripping. "
         f"Returning empty translations. Raw response head: {response[:200]}"
@@ -132,7 +118,7 @@ def _parse_translation_response(response: str, original_regions: list[dict]) -> 
 
 async def translate_page(regions: list[dict]) -> list[dict]:
     """
-    Stage 5: Translate ONE page using custom 'Sugoi' settings.
+    Translate ONE page using custom 'Sugoi' settings.
     Includes terminal streaming for debug visibility.
     """
     if not regions:
@@ -144,44 +130,30 @@ async def translate_page(regions: list[dict]) -> list[dict]:
         indent=2,
     )
     
-    # ♻️ UPDATED PROMPT: Adds a "One-Shot" Example to prevent echoing
-    system_prompt = (
-        "You are a professional manga translator. Your task is to fill the empty 'english' field in the provided JSON.\n"
-        "Rules:\n"
-        "1. Translate the text in the 'japanese' field to English.\n"
-        "2. Put the translation ONLY in the 'english' field.\n"
-        "3. If the text is already English, copy it to the 'english' field.\n"
-        "4. Return ONLY the JSON array.\n\n"
-        "Example Interaction:\n"
-        "User: [{\"index\": 0, \"japanese\": \"こんにちは\", \"english\": \"\"}]\n"
-        "Assistant: [{\"index\": 0, \"japanese\": \"こんにちは\", \"english\": \"Hello there.\"}]\n\n"
-        "Now process this real data:"
-    )
+    # Load prompt from external SOP file
+    prompt_path = Path(__file__).parent.parent / "prompts" / "translation.md"
+    try:
+        system_prompt = prompt_path.read_text("utf-8")
+    except Exception as e:
+        logger.error(f"Failed to load translation prompt from {prompt_path}: {e}")
+        system_prompt = "You are a manga translator. Translate 'japanese' to 'english' in the provided JSON array."
     
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user",   "content": input_json},
     ]
-    
     response_text = ""
-    
-    print(f"\n🔹 [Sugoi-14B] Translating {len(regions)} bubbles...")
-    print("---------------------------------------------------")
 
     async for token in model_manager.generate_stream(
         messages=messages,
         max_tokens=4096,
-        temperature=0.3,      
+        temperature=0.5,      
         top_k=40,             
         top_p=0.9,            
         min_p=0.05,           
         repeat_penalty=1.1,   
         stop=None,
     ):
-        print(token, end="", flush=True)
         response_text += token
         
-    print("\n---------------------------------------------------")
-    print("✅ [Sugoi-14B] Generation Complete.\n")
-
     return _parse_translation_response(response_text, regions)

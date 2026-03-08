@@ -34,7 +34,7 @@ const DigitalClock = () => {
 export default function HomePage() {
   const notes = useNoteStore(state => state.notes);
   const isManagerOpen = useNoteStore(state => state.isManagerOpen);
-  const addNote = useNoteStore(state => state.addNote); // <-- Brought in addNote
+  const addNote = useNoteStore(state => state.addNote); 
   
   const user = useAuthStore(state => state.user);
   const logout = useAuthStore(state => state.logout);
@@ -48,7 +48,6 @@ export default function HomePage() {
   const isYoutubeOpen = useWidgetStore(state => state.isYoutubeOpen);
   const setYoutubeOpen = useWidgetStore(state => state.setYoutubeOpen);
 
-  // Close dropdown if user clicks anywhere outside of it
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {

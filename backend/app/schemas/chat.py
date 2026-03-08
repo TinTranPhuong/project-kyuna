@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class ChatMessageRequest(BaseModel):
     content: str  
     model_used: Optional[str] = None  
+    image_base64: Optional[str] = None
     
 class CreateConversationRequest(BaseModel):
     title: Optional[str] = None
@@ -33,6 +34,7 @@ class MessageResponse(BaseModel):
     tokens_used: Optional[int] = None
     generation_ms: Optional[int] = None
     model_used: Optional[str] = None
+    image_base64: Optional[str] = None
     created_at: datetime
     
     model_config = ConfigDict(from_attributes=True)

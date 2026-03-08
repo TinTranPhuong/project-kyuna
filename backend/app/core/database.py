@@ -4,7 +4,6 @@ from sqlalchemy.orm import DeclarativeBase
 
 from app.core.config import settings
 
-# SQLite does not support pool_size / max_overflow — detect and branch
 _is_sqlite = settings.DATABASE_URL.startswith("sqlite")
 
 if _is_sqlite:

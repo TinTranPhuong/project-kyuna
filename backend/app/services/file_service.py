@@ -59,7 +59,7 @@ def validate_file_type(file_bytes: bytes, filename: str) -> str:
     magic_bytes_map = {
         b'\xFF\xD8\xFF': 'jpg',
         b'\x89PNG': 'png',
-        b'PK\x03\x04': 'cbz',  # ZIP format — CBZ uses ZIP
+        b'PK\x03\x04': 'cbz',  
     }
     
     for magic, ext in magic_bytes_map.items():

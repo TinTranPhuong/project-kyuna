@@ -33,7 +33,6 @@ export const FactRow: React.FC<FactRowProps> = ({
   useEffect(() => {
     if (isEditing && textareaRef.current) {
       textareaRef.current.focus()
-      // Move cursor to the end
       textareaRef.current.setSelectionRange(editText.length, editText.length)
     }
   }, [isEditing, editText.length])
@@ -60,7 +59,7 @@ export const FactRow: React.FC<FactRowProps> = ({
       <input
         type="checkbox"
         checked={isSelected}
-        onChange={() => {}} // React requires onChange if checked is provided, but we handle via onClick for shiftKey
+        onChange={() => {}} 
         onClick={(e) => onToggleSelect(e, fact.id)}
         className="mt-1.5 cursor-pointer accent-blue-500"
       />

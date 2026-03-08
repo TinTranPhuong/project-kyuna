@@ -52,11 +52,11 @@ export default defineConfig({
     /* Test against mobile viewports. */
     // {
     //   name: 'Mobile Chrome',
-    //   use: { ...devices['Pixel 5'] },
+    //   use: { ...devices['Galaxy S26'] },
     // },
     // {
     //   name: 'Mobile Safari',
-    //   use: { ...devices['iPhone 12'] },
+    //   use: { ...devices['iPhone 17'] },
     // },
 
     /* Test against branded browsers. */
@@ -70,7 +70,7 @@ export default defineConfig({
     // },
   ],
 
-  /* Run your local dev server before starting the tests */
+  /* Run local dev server before starting the tests */
   // webServer: {
   //   command: 'npm run start',
   //   url: 'http://localhost:3000',

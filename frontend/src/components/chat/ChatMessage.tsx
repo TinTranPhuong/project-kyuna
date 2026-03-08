@@ -1,6 +1,9 @@
 import { useState, memo, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Copy, Check, User, Bot, Brain, ChevronDown, ChevronRight } from 'lucide-react';
@@ -11,8 +14,9 @@ interface ChatMessageProps {
     id: string;
     role: 'user' | 'assistant' | 'system';
     content: string;
-    timestamp: string; 
+    timestamp: string;
     tokens_used?: number | null;
+    image_base64?: string | null;
   };
   isStreaming?: boolean;
 }
@@ -22,52 +26,31 @@ export const ChatMessage = memo(({ message, isStreaming }: ChatMessageProps) => 
   const [copied, setCopied] = useState(false);
   const [isThinkingOpen, setIsThinkingOpen] = useState(false);
 
-  // Extract <think> content vs main content
   const { thoughtContent, mainContent, isThinking } = useMemo(() => {
-    // 1. User messages are never "thinking"
     if (isUser) return { thoughtContent: null, mainContent: message.content, isThinking: false };
-
-    // 2. Check if we have a closing tag </think>
-    // This is the most reliable signal that thinking is happening or happened.
     const hasClosingTag = message.content.includes('</think>');
-    
-    // 3. Regex Strategy:
-    // (?:^|<think>) -> Match either the START of the string OR an explicit <think> tag
-    // ([\s\S]*?)    -> Capture content non-greedily
-    // (?:<\/think>|$) -> Stop at </think> OR end of string (if streaming)
-    
+
     let match;
     if (hasClosingTag) {
-        // If we have a closing tag, we act aggressively: everything before it is a thought.
-        // This fixes the bug where the opening <think> is missing.
-        const robustRegex = /(?:^|<think>)([\s\S]*?)<\/think>/;
-        match = message.content.match(robustRegex);
+      const robustRegex = /(?:^|<think>)([\s\S]*?)<\/think>/;
+      match = message.content.match(robustRegex);
     } else {
-        // If no closing tag yet, strictly require <think> to start (to avoid hiding normal text)
-        // unless we are in the very early streaming phase (optional, keeping it strict for safety)
-        const strictRegex = /<think>([\s\S]*?)$/;
-        match = message.content.match(strictRegex);
+      const strictRegex = /<think>([\s\S]*?)$/;
+      match = message.content.match(strictRegex);
     }
 
     if (match) {
-      const thoughtContent = match[1]; // The text inside the tags
-      
-      // Determine if we are still actively thinking (streaming and no closing tag)
+      const thoughtContent = match[1];
       const isThinking = !hasClosingTag && !!isStreaming;
-      
-      // Remove the full match (tags + content) from the main message
-      // Note: If we matched from start (^), this correctly strips the preamble.
+
       let cleanMain = message.content.replace(match[0], '').trim();
-      
-      // Edge case: If main content is empty but we are done thinking, ensure we don't show nothing
       if (!isThinking && !cleanMain) {
-        cleanMain = ""; 
+        cleanMain = "";
       }
 
       return { thoughtContent, mainContent: cleanMain, isThinking };
     }
 
-    // Default: No thinking detected
     return { thoughtContent: null, mainContent: message.content, isThinking: false };
   }, [message.content, isUser, isStreaming]);
 
@@ -79,14 +62,14 @@ export const ChatMessage = memo(({ message, isStreaming }: ChatMessageProps) => 
 
   return (
     <div className={cn(
-      "flex w-full mb-8 group animate-in fade-in slide-in-from-bottom-2", 
+      "flex w-full mb-8 group animate-in fade-in slide-in-from-bottom-2",
       isUser ? "justify-end" : "justify-start"
     )}>
       <div className={cn(
-        "flex max-w-[90%] md:max-w-[80%] gap-4", 
+        "flex max-w-[90%] md:max-w-[80%] gap-4",
         isUser ? "flex-row-reverse" : "flex-row"
       )}>
-        
+
         {/* Avatar */}
         <div className={cn(
           "w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-1 shadow-md",
@@ -98,24 +81,33 @@ export const ChatMessage = memo(({ message, isStreaming }: ChatMessageProps) => 
         {/* Content Bubble */}
         <div className="flex flex-col space-y-2 min-w-0">
           <div className={cn(
-            "p-4 md:p-5 rounded-2xl text-[15px] leading-relaxed shadow-xl", 
-            isUser 
-              ? "bg-primary-600/80 backdrop-blur-md text-white rounded-tr-none shadow-primary-900/20" 
+            "p-4 md:p-5 rounded-2xl text-[15px] leading-relaxed shadow-xl",
+            isUser
+              ? "bg-primary-600/80 backdrop-blur-md text-white rounded-tr-none shadow-primary-900/20"
               : "bg-black/40 backdrop-blur-md border border-white/10 text-white/90 rounded-tl-none"
           )}>
             {isUser ? (
-              <p className="whitespace-pre-wrap">{message.content}</p>
+              <div className="flex flex-col gap-2">
+                {message.image_base64 && (
+                  <img
+                    src={message.image_base64}
+                    alt="User uploaded"
+                    className="max-w-[150px] md:max-w-xs rounded-lg object-contain bg-black/20"
+                  />
+                )}
+                <p className="whitespace-pre-wrap">{message.content}</p>
+              </div>
             ) : (
               <>
                 {/* Thinking / Reasoning Dropdown */}
                 {thoughtContent !== null && (
                   <div className="mb-4 rounded-lg overflow-hidden border border-white/5 bg-black/20">
-                    <button 
+                    <button
                       onClick={() => setIsThinkingOpen(!isThinkingOpen)}
                       className={cn(
                         "flex items-center gap-2 w-full px-3 py-2 text-xs font-medium transition-colors select-none",
-                        isThinking 
-                          ? "text-primary-300 animate-pulse bg-primary-500/5" 
+                        isThinking
+                          ? "text-primary-300 animate-pulse bg-primary-500/5"
                           : "text-white/50 hover:text-white/80 hover:bg-white/5"
                       )}
                     >
@@ -124,10 +116,10 @@ export const ChatMessage = memo(({ message, isStreaming }: ChatMessageProps) => 
                         {isThinking ? "Thinking..." : "Thought Process"}
                       </span>
                       <div className="ml-auto opacity-70">
-                         {isThinkingOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                        {isThinkingOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                       </div>
                     </button>
-                    
+
                     {/* Content area: Visible if open OR if currently thinking (auto-open while streaming) */}
                     {(isThinkingOpen || isThinking) && (
                       <div className="px-3 py-3 text-xs md:text-sm text-white/60 border-t border-white/5 font-mono bg-black/10 leading-relaxed whitespace-pre-wrap animate-in fade-in slide-in-from-top-1">
@@ -140,7 +132,8 @@ export const ChatMessage = memo(({ message, isStreaming }: ChatMessageProps) => 
 
                 {/* Main Response */}
                 <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
+                  remarkPlugins={[remarkGfm, remarkMath]}
+                  rehypePlugins={[rehypeKatex]}
                   components={{
                     // --- TYPOGRAPHY SPACING RULES ---
                     p: ({ children }) => <p className="mb-4 last:mb-0 leading-relaxed text-white/85">{children}</p>,
@@ -152,12 +145,20 @@ export const ChatMessage = memo(({ message, isStreaming }: ChatMessageProps) => 
                     h3: ({ children }) => <h3 className="text-lg font-semibold mb-3 mt-4 text-white">{children}</h3>,
                     strong: ({ children }) => <strong className="font-bold text-white">{children}</strong>,
                     blockquote: ({ children }) => <blockquote className="border-l-4 border-primary-500/50 pl-4 py-2 my-4 bg-black/20 rounded-r-lg italic text-white/70">{children}</blockquote>,
-                    
+
+                    // --- TABLE STYLING ---
+                    table: ({ children }) => <div className="overflow-x-auto my-6 border border-white/20 rounded-lg"><table className="w-full text-sm text-left text-white/90">{children}</table></div>,
+                    thead: ({ children }) => <thead className="text-xs uppercase bg-white/10 border-b border-white/20">{children}</thead>,
+                    tbody: ({ children }) => <tbody className="divide-y divide-white/10">{children}</tbody>,
+                    tr: ({ children }) => <tr className="hover:bg-white/5 transition-colors">{children}</tr>,
+                    th: ({ children }) => <th className="px-4 py-3 border-r border-white/10 last:border-r-0 font-semibold">{children}</th>,
+                    td: ({ children }) => <td className="px-4 py-3 border-r border-white/10 last:border-r-0 leading-relaxed">{children}</td>,
+
                     // --- CODE BLOCKS ---
                     code({ node, inline, className, children, ...props }: any) {
                       const match = /language-(\w+)/.exec(className || '');
                       const codeString = String(children).replace(/\n$/, '');
-                      
+
                       if (!inline && match) {
                         return (
                           <div className="relative my-6 rounded-lg overflow-hidden border border-white/10 group/code">

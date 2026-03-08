@@ -25,6 +25,10 @@ class MemoryFactResponse(BaseModel):
     
     model_config = ConfigDict(from_attributes=True)
 
+class MemoryFactListResponse(BaseModel):
+    items: List[MemoryFactResponse]
+    total: int
+
 class UniversalFactCreate(BaseModel):
     content: str
 

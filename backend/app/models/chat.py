@@ -62,6 +62,7 @@ class ChatMessage(Base):
     tokens_used: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     generation_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     model_used: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    image_base64: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, server_default=func.now())
 

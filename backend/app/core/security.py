@@ -5,8 +5,6 @@ from jose import jwt, JWTError
 
 from app.core.config import settings
 
-# We deleted pwd_context = CryptContext(...)
-
 def hash_password(plain_password: str) -> str:
     """Hash a password using bcrypt with SHA-256 pre-hashing (bypasses 72-byte limit safely)."""
     # 1. Pre-hash to 64 hex characters to ensure it always fits bcrypt's limits

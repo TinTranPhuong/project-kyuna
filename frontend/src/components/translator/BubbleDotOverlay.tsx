@@ -18,7 +18,7 @@ export const BubbleDotOverlay: React.FC<BubbleDotOverlayProps> = ({
 }) => {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
-  
+
   // Container sizing state
   const [containerWidth, setContainerWidth] = useState(0);
   const [containerHeight, setContainerHeight] = useState(0);
@@ -41,7 +41,7 @@ export const BubbleDotOverlay: React.FC<BubbleDotOverlayProps> = ({
   const handleCopy = async (e: React.MouseEvent, text: string, index: number) => {
     e.stopPropagation(); // Prevent clicking the dot underneath
     if (!text) return;
-    
+
     try {
       await navigator.clipboard.writeText(text);
       setCopiedIndex(index);
@@ -86,7 +86,7 @@ export const BubbleDotOverlay: React.FC<BubbleDotOverlayProps> = ({
         const displayY = cy * scaleY;
 
         const isActive = activeIndex === region.index;
-        
+
         // 3. Edge Clamping: If too close to top (< 80px), flip popup downwards
         const isTopEdge = displayY < 80;
 
@@ -99,7 +99,7 @@ export const BubbleDotOverlay: React.FC<BubbleDotOverlayProps> = ({
               aria-label={`View translation for bubble ${region.index + 1}`}
               onMouseEnter={() => setActiveIndex(region.index)}
               onMouseLeave={() => setActiveIndex(null)}
-              onFocus={() => {}} // Optional: Auto-show on tab focus? Kept to explicit Enter/Space per ticket
+              onFocus={() => { }}
               onKeyDown={(e) => handleKeyDown(e, region.index)}
               className="absolute pointer-events-auto cursor-pointer focus:outline-none group"
               style={{
@@ -113,8 +113,8 @@ export const BubbleDotOverlay: React.FC<BubbleDotOverlayProps> = ({
               {/* Dot Visuals */}
               <div className={cn(
                 "w-full h-full rounded-full border-2 border-white transition-all duration-300 shadow-[0_0_12px_rgba(34,197,94,0.8)]",
-                isActive 
-                  ? "bg-green-400 scale-125" 
+                isActive
+                  ? "bg-green-400 scale-125"
                   : "bg-green-500 opacity-80 animate-pulse group-hover:opacity-100 group-hover:scale-125 group-focus:ring-2 group-focus:ring-white group-focus:ring-offset-2 group-focus:ring-offset-black"
               )} />
             </div>
@@ -122,17 +122,17 @@ export const BubbleDotOverlay: React.FC<BubbleDotOverlayProps> = ({
             {/* The Popup */}
             {isActive && (
               <div
-                style={{ 
-                  left: displayX, 
-                  top: displayY + (isTopEdge ? 12 : -12) // Offset logic
+                style={{
+                  left: displayX,
+                  top: displayY + (isTopEdge ? 12 : -12)
                 }}
                 className={cn(
                   "absolute z-30 -translate-x-1/2 w-max max-w-[280px] min-w-[180px]",
-                  "bg-surface-950/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl p-4",
+                  "bg-black/90 border border-white/10 rounded-xl shadow-2xl p-4",
                   "pointer-events-auto animate-in fade-in zoom-in-95 duration-150 origin-center",
                   isTopEdge ? "mt-2" : "-translate-y-full mb-2"
                 )}
-                onMouseEnter={() => setActiveIndex(region.index)} // Keep open when hovering popup
+                onMouseEnter={() => setActiveIndex(region.index)}
                 onMouseLeave={() => setActiveIndex(null)}
               >
                 {/* Header: Original Text */}
@@ -150,11 +150,11 @@ export const BubbleDotOverlay: React.FC<BubbleDotOverlayProps> = ({
                 <div>
                   <div className="flex items-center justify-between mb-0.5">
                     <span className="text-[10px] uppercase font-bold text-primary-400/80 tracking-wider">Translation</span>
-                    
+
                     {/* Copy Button */}
                     {region.english && (
                       <button
-                        onClick={(e) => handleCopy(e, region.english, region.index)}
+                        onClick={(e) => handleCopy(e, region.english || '', region.index)}
                         className="text-white/30 hover:text-white transition-colors p-1 -mr-1 rounded-md active:bg-white/10"
                         title="Copy translation"
                       >
@@ -179,12 +179,12 @@ export const BubbleDotOverlay: React.FC<BubbleDotOverlayProps> = ({
                 </div>
 
                 {/* Decorative Arrow Tip */}
-                <div 
+                <div
                   className={cn(
-                    "absolute left-1/2 -translate-x-1/2 w-3 h-3 bg-surface-950/95 border-r border-b border-white/10 rotate-45",
-                    isTopEdge 
-                      ? "top-[-7px] border-b-0 border-r-0 border-t border-l bg-surface-950" // Point Up
-                      : "bottom-[-7px] bg-surface-950" // Point Down
+                    "absolute left-1/2 -translate-x-1/2 w-3 h-3 bg-black/90 border-r border-b border-white/10 rotate-45",
+                    isTopEdge
+                      ? "top-[-7px] border-b-0 border-r-0 border-t border-l"
+                      : "bottom-[-7px]"
                   )}
                 />
               </div>

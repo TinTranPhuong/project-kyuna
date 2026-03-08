@@ -27,7 +27,7 @@ class TranslationJob(Base):
     
     status: Mapped[str] = mapped_column(String(20), default="pending", server_default="pending", nullable=False)
     
-    # UPDATED: Translation engine used for this job (defaults to the new 6-stage "pipeline")
+    # Translation engine used for this job (defaults to the new 6-stage "pipeline")
     engine: Mapped[str] = mapped_column(String(20), default="pipeline", server_default="pipeline")
     
     source_language: Mapped[str] = mapped_column(String(10), default="auto", server_default="auto")
@@ -55,7 +55,7 @@ class TranslationJob(Base):
         "TranslationPage", 
         back_populates="job", 
         cascade="all, delete-orphan",
-        order_by="TranslationPage.page_number.asc()" # Keep pages in sequential order
+        order_by="TranslationPage.page_number.asc()" 
     )
 
 
@@ -76,7 +76,7 @@ class TranslationPage(Base):
     ocr_raw_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     translated_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     
-    # EXISTING: Stores streamed JSON array of detected/translated text regions
+    # Stores streamed JSON array of detected/translated text regions
     regions_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
     
     has_text: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
@@ -88,7 +88,7 @@ class TranslationPage(Base):
         nullable=False
     )
     
-    # NEW: Tracks the 6-stage pipeline progress (pending → detecting → cropping → ocr → translating → done → failed)
+    # Tracks the 6-stage pipeline progress (pending → detecting → cropping → ocr → translating → done → failed)
     phase_status: Mapped[str] = mapped_column(
         String(20), 
         default="pending", 
@@ -102,7 +102,7 @@ class TranslationPage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
-        # UPDATED: Added 'completed' to prevent constraint failure from our previous backend fixes!
+        # Added 'completed' to prevent constraint failure from our previous backend fixes!
         CheckConstraint(
             "processing_status IN ('pending', 'processing', 'done', 'completed', 'no_text', 'failed')", 
             name="chk_page_status"

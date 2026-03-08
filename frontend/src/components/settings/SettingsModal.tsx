@@ -4,7 +4,7 @@ import { motion, AnimatePresence, useDragControls } from 'framer-motion';
 import {
   Palette, Music, User as UserIcon, Trash2, 
   AlertTriangle, Save, Loader2, AlertCircle, Image as ImageIcon, X, Plus, Play, 
-  ChevronDown, ChevronRight, Pencil, Check // <--- Added new icons for the UI
+  ChevronDown, ChevronRight, Pencil, Check
 } from 'lucide-react';
 import type { AxiosError } from 'axios';
 
@@ -86,7 +86,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     if (!newGroupName.trim()) return;
     const newGroup: MusicGroup = { id: Date.now().toString(), name: newGroupName.trim(), links: [] };
     setMusicGroups([...musicGroups, newGroup]);
-    setExpandedGroups(prev => ({ ...prev, [newGroup.id]: true })); // Auto-expand new group
+    setExpandedGroups(prev => ({ ...prev, [newGroup.id]: true })); 
     setNewGroupName('');
   };
 

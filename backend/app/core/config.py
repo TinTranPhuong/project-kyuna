@@ -3,8 +3,6 @@ from typing import List, Union
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Resolve .env relative to THIS file, not the working directory.
-# backend/app/core/config.py → backend/.env
 _ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
 
 
@@ -58,6 +56,5 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
-
 
 settings = Settings()

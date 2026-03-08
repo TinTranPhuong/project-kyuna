@@ -14,7 +14,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <App />
-        
+
         {/* Global Toast Notifications with Glass Styling */}
         <Toaster
           position="top-right"
@@ -25,12 +25,12 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
               backdropFilter: 'blur(10px)',
               border: '1px solid rgba(255,255,255,0.1)',
             },
-            success: { iconTheme: { primary: '#14b8a6', secondary: '#fff' } },
+            success: { iconTheme: { primary: '#ff8fab', secondary: '#fff' } },
             error: { iconTheme: { primary: '#ef4444', secondary: '#fff' } },
           }}
         />
       </BrowserRouter>
-      
+
       {/* React Query Devtools - Only bundles in development mode automatically */}
       <ReactQueryDevtools initialIsOpen={false} />
     </QueryClientProvider>

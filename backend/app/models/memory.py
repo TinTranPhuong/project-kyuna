@@ -58,9 +58,9 @@ class Document(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     
     filename: Mapped[str] = mapped_column(String(500))
-    original_path: Mapped[str] = mapped_column(String(1000))   # stored as string, accessed via Path()
+    original_path: Mapped[str] = mapped_column(String(1000))   
     file_size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
-    file_type: Mapped[str] = mapped_column(String(20))         # pdf | docx | txt | md
+    file_type: Mapped[str] = mapped_column(String(20))         
     
     status: Mapped[str] = mapped_column(String(20), default="processing")
     chunk_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
@@ -97,7 +97,7 @@ class ExtractionJob(Base):
     conversation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("chat_conversations.id", ondelete="CASCADE"), index=True)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     
-    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | running | done | failed
+    status: Mapped[str] = mapped_column(String(20), default="pending")  
     facts_extracted: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     

@@ -58,8 +58,8 @@ def semantic_chunk(text: str, target_tokens: int = 400, overlap_tokens: int = 50
             chunk_index=i,
             content=content.strip(),
             token_count=count_tokens(content),
-            page_number=None,      # set by caller from parser metadata
-            section_heading=None,  # set by caller from parser metadata
+            page_number=None,      
+            section_heading=None,  
         ))
         
     return chunks

@@ -40,21 +40,23 @@ export function usePhaseStream(
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
   const readerRef = useRef<ReadableStreamDefaultReader | null>(null)
-  
+
   const cachedRegions = useTranslatorStore(s => jobId ? s.pageRegions[pageNumber] : undefined)
   const token = useAuthStore(s => s.token)
   const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
   useEffect(() => {
-    if (cachedRegions && cachedRegions.length > 0) {
-      setRegions(cachedRegions as unknown as PipelineRegion[])
-      setPhases(initialPhases().map(p => ({ ...p, status: 'done' })))
-      setIsDone(true)
+    // If we already have cached regions from the job details, nothing to stream
+    if (!jobId || (cachedRegions && cachedRegions.length > 0)) {
+      if (cachedRegions && cachedRegions.length > 0) {
+        setRegions(cachedRegions as unknown as PipelineRegion[])
+        setPhases(initialPhases().map(p => ({ ...p, status: 'done' })))
+        setIsDone(true)
+      }
+      return
     }
-  }, [cachedRegions])
 
-  useEffect(() => {
-    if (!jobId || (cachedRegions && cachedRegions.length > 0)) return
+    if (!token) return
 
     setPhases(initialPhases())
     setRegions([])
@@ -63,26 +65,29 @@ export function usePhaseStream(
     setErrorMsg(null)
 
     let cancelled = false
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
 
-    const connect = async () => {
-      // THE FIX: Ensure we have a token before connecting
-      if (!token) return;
-
+    const startStream = async () => {
       try {
         const response = await fetch(
           `${baseUrl}/api/v1/translate/jobs/${jobId}/pages/${pageNumber}/pipeline-progress`,
           {
             headers: {
-              // THE FIX: Add Authorization header to stop 401 errors
               Authorization: `Bearer ${token}`,
               'Cache-Control': 'no-cache',
+              'Accept': 'text/event-stream',
             }
           }
         )
 
-        if (!response.ok || !response.body) return
+        if (!response.ok) {
+          setIsFailed(true)
+          setErrorMsg(`HTTP Error ${response.status}`)
+          return
+        }
+        if (!response.body) return
 
-        const reader = response.body.getReader()
+        reader = response.body.getReader()
         readerRef.current = reader
         const decoder = new TextDecoder()
         let buffer = ''
@@ -93,50 +98,65 @@ export function usePhaseStream(
 
           buffer += decoder.decode(value, { stream: true })
           const lines = buffer.split('\n')
-          buffer = lines.pop() ?? ''
+          buffer = lines.pop() ?? '' 
 
           for (const line of lines) {
             if (!line.startsWith('data: ')) continue
+            const jsonStr = line.slice(6).trim()
+            if (!jsonStr) continue
+
             try {
-              const event = JSON.parse(line.slice(6)) as PhaseEvent
-              if ('waiting' in event) continue
+              const event = JSON.parse(jsonStr) as PhaseEvent
+
               if ('stage' in event) {
                 if (event.stage === 6 && event.status === 'done') {
                   const stage6Event = event as { stage: 6; regions: PipelineRegion[] }
                   setRegions(stage6Event.regions)
                   setPhases(initialPhases().map(p => ({ ...p, status: 'done' })))
                   setIsDone(true)
-                  reader.cancel()
-                  return
+                  return 
                 }
+
                 if (event.stage === 0 && event.status === 'failed') {
                   const failedEvent = event as { stage: 0; error: string }
                   setIsFailed(true)
                   setErrorMsg(failedEvent.error)
-                  reader.cancel()
-                  return
+                  return 
                 }
+
                 let detailText: string | undefined = undefined
                 if ('region_count' in event && event.region_count !== undefined) {
                   detailText = `${event.region_count} bubbles`
                 } else if ('done' in event && 'total' in event) {
                   detailText = `${event.done}/${event.total} bubbles`
                 }
+
                 setPhases(prev => prev.map(p =>
                   p.stage === event.stage
                     ? { ...p, status: event.status === 'running' ? 'running' : 'done', detail: detailText }
                     : p
                 ))
               }
-            } catch { }
+            } catch (err) {
+              console.warn('[usePageStream] Failed to parse SSE line:', jsonStr, err)
+            }
           }
         }
-      } catch { }
+      } catch (err: any) {
+        if (err.name !== 'AbortError' && !cancelled) {
+          setIsFailed(true)
+          setErrorMsg(err.message || 'Stream connection failed')
+        }
+      }
     }
-    connect()
+
+    startStream()
+
     return () => {
       cancelled = true
-      readerRef.current?.cancel()
+      if (reader) {
+        reader.cancel().catch(() => { })
+      }
     }
   }, [jobId, pageNumber, token, baseUrl, cachedRegions])
 

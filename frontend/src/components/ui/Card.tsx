@@ -2,7 +2,6 @@ import React from 'react';
 import { motion, HTMLMotionProps } from 'framer-motion';
 import { cn } from '@/lib/utils';
 
-// We extend HTMLMotionProps so the component understands both div and motion props
 export interface CardProps extends HTMLMotionProps<"div"> {
   hoverable?: boolean;
 }

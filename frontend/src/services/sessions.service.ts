@@ -1,7 +1,6 @@
 import axiosInstance from '@/lib/axios'
 import type { SessionStats } from '@/types/timer.types'
 
-// Re-export so callers import from one place
 export type { SessionStats }
 
 /**
@@ -13,23 +12,17 @@ export type { SessionStats }
  *   GET  /stats     — aggregate stats for the current user
  *   GET  /chart     — daily focus breakdown for the last N days
  */
-
-// ─── Request shape (matches backend CreateSessionRequest Pydantic schema) ────
-// Fields use snake_case — FastAPI validation will reject camelCase keys.
-// Required: session_type, duration_minutes, completed, started_at
-// Optional: notes
 export interface SaveSessionPayload {
   session_type: 'work' | 'short_break' | 'long_break'
   duration_minutes: number
   completed: boolean
-  started_at: string    // ISO 8601 datetime string, e.g. new Date().toISOString()
+  started_at: string
   notes?: string
 }
 
-// ─── Daily chart point (matches backend DailyChartPoint schema) ──────────────
 export interface DailyChartPoint {
-  day: string       // abbreviated day name: "Mon", "Tue", …
-  minutes: number   // total focus minutes for that day (0 if no sessions)
+  day: string
+  minutes: number
 }
 
 export const sessionsService = {

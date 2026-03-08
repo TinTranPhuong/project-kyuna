@@ -46,20 +46,17 @@ export const useNoteStore = create<NoteStore>((set) => ({
   closeNote: (id) => set(state => ({ notes: state.notes.map(n => n.id === id ? { ...n, isOpen: false } : n) })),
 
   addNote: async () => {
-    // Optimistic: show notepad immediately with temp ID
     const tempId = `temp-${Date.now()}`
     set(state => ({
       notes: [{ id: tempId, title: 'NOTE', text: '', isOpen: true }, ...state.notes],
     }))
     try {
       const created = await notesService.create({ title: 'NOTE', text: '' })
-      // Swap temp ID for the real DB UUID
       set(state => ({
         notes: state.notes.map(n => n.id === tempId ? { ...created, isOpen: true } : n),
       }))
     } catch (err) {
       console.error('[noteStore] addNote FAILED — notes table may not exist. Run SQL migration!', err)
-      // Roll back optimistic note
       set(state => ({ notes: state.notes.filter(n => n.id !== tempId) }))
     }
   },

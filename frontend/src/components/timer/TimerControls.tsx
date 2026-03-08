@@ -36,7 +36,7 @@ export const TimerControls = () => {
         {isRunning ? (
           <Pause size={32} className="fill-current" />
         ) : (
-          <Play size={32} className="fill-current ml-2" /* ml-2 visually centers the play triangle */ />
+          <Play size={32} className="fill-current ml-2" />
         )}
       </motion.button>
 

@@ -22,7 +22,7 @@ export type { TranslationJob, TranslationJobDetail }
  *   DELETE /jobs/{id}                       — delete job + files
  *   GET  /jobs/{id}/pages/{num}/original    — original image (FileResponse)
  *   GET  /jobs/{id}/pages/{num}/translated  — translated image (FileResponse)
- *   GET  /jobs/{id}/download               — ZIP of all translated pages
+ *   GET  /jobs/{id}/download                — ZIP of all translated pages
  */
 export const translatorService = {
 
@@ -106,6 +106,15 @@ export const translatorService = {
     // Await the deletion but do NOT try to return or parse response.data
     // since a 204 No Content response has no body.
     await axiosInstance.delete(`/api/v1/translate/jobs/${id}`);
+  },
+
+  /** PATCH /api/v1/translate/jobs/:id/rename */
+  renameJob: async (id: string, name: string): Promise<TranslationJob> => {
+    const response = await axiosInstance.patch<TranslationJob>(
+      `/api/v1/translate/jobs/${id}/rename`,
+      { name }
+    );
+    return response.data;
   },
 
   /**

@@ -38,15 +38,15 @@ async def list_models():
     presets = [
         {
             "filename": "Qwen3VL-8B-Instruct-Q8_0.gguf",
-            "display_name": "Fast (Qwen 3 8B)",
+            "display_name": "FAST",
             "description": "fast and can see things",
             "type": "vision",
         },
         {
             "filename": "Qwen3.5-35B-A3B-UD-IQ3_S.gguf",
-            "display_name": "Thinking (Qwen 3.5 35B)",
+            "display_name": "THINKING",
             "description": "use for difficult tasks",
-            "type": "text",
+            "type": "vision",
         }
     ]
 

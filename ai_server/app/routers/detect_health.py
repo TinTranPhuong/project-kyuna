@@ -11,7 +11,7 @@ async def detect_health():
     """
     vram_usage = 0
     if torch.cuda.is_available():
-        vram_usage = torch.cuda.memory_allocated() / (1024 * 1024)  # MB
+        vram_usage = torch.cuda.memory_allocated() / (1024 * 1024)  
 
     return {
         "status": "loaded" if detector_service.is_loaded else "unloaded",

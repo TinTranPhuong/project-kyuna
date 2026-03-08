@@ -9,10 +9,6 @@ export default function LoginPage() {
   const navigate = useNavigate()
   const location = useLocation()
 
-  // BUG 1 FIXED: use authStore.login (not setUser).
-  // setUser only sets the user object — it never stores the access/refresh tokens,
-  // so the axios interceptor has nothing to send and every protected API call
-  // immediately fails with 401. login() stores user + both tokens atomically.
   const login = useAuthStore(state => state.login)
 
   const [email,    setEmail]    = useState('')
@@ -39,20 +35,12 @@ export default function LoginPage() {
 
     setIsLoading(true)
     try {
-      // BUG 2 FIXED: authService.login takes two positional args (email, password),
-      // NOT a single object. Calling it as login({ email, password }) passes an
-      // object as the first arg and leaves password undefined → 422 every time.
       const response = await authService.login(email, password)
-
-      // BUG 1 CONTINUED: login() expects (user, access_token, refresh_token)
       login(response.user, response.access_token, response.refresh_token)
 
       const from = (location.state as { from?: { pathname: string } })?.from?.pathname ?? '/'
       navigate(from, { replace: true })
     } catch (err) {
-      // BUG 3 FIXED: err:any → typed AxiosError. err:any bypasses ESLint no-explicit-any.
-      // BUG 4 FIXED: FastAPI returns { detail: string }, NOT { message: string }.
-      // err.response?.data?.message is always undefined — the error banner never shows.
       const axiosErr = err as AxiosError<{ detail: string }>
       setApiError(
         axiosErr.response?.data?.detail ?? 'Invalid email or password. Please try again.'

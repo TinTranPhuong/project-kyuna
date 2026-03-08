@@ -3,7 +3,7 @@ import { useTranslatorStore } from '@/store/translatorStore';
 import { cn } from '@/lib/utils';
 import { FileText, CheckCircle2, AlertCircle, Loader2, Pencil, Trash2 } from 'lucide-react';
 
-// --- Native Date Helper (No external library needed) ---
+// --- Native Date Helper ---
 function timeAgo(dateString: string) {
   if (!dateString) return '';
   const date = new Date(dateString);

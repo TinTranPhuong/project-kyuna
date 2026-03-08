@@ -7,7 +7,7 @@ from app.core.database import get_db
 from app.dependencies.auth import get_current_user
 from app.models.user import User
 from app.schemas.memory import (
-    MemoryFactResponse, MemoryFactUpdate,
+    MemoryFactResponse, MemoryFactUpdate, MemoryFactListResponse,
     UniversalFactResponse, UniversalFactCreate, UniversalFactUpdate,
     MemorySearchResponse, BulkDeleteRequest, BulkDeleteResponse
 )
@@ -17,7 +17,7 @@ router = APIRouter()
 
 # --- Memory Facts --------------------------------------------------------------
 
-@router.get("/facts", response_model=dict)
+@router.get("/facts", response_model=MemoryFactListResponse)
 async def list_facts(
     conversation_id: Optional[UUID] = None,
     limit: int = Query(50, ge=1, le=200),

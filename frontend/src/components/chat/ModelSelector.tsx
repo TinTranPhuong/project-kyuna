@@ -11,7 +11,7 @@ interface ModelInfo {
   type: 'text' | 'vision';
   size?: string;
   context_window?: number;
-  description?: string; // 👈 Critical Field
+  description?: string;
   is_loaded?: boolean;
 }
 
@@ -21,7 +21,7 @@ export const ModelSelector = () => {
   const { data: models, isLoading } = useQuery<ModelInfo[]>({
     queryKey: ['chat-models'],
     queryFn: () => chatService.getModels() as Promise<ModelInfo[]>,
-    staleTime: 0, // 👈 Force refresh immediately
+    staleTime: 0,
     refetchOnWindowFocus: true,
   });
 
@@ -76,7 +76,7 @@ export const ModelSelector = () => {
               <div className="flex flex-col">
                 <span className="font-medium">{model.name}</span>
                 
-                {/* 🟢 THE FIX: Checks for description first */}
+                {/* Checks for description first */}
                 {model.description ? (
                    <span className="text-[10px] opacity-50 font-mono text-primary-300">
                      {model.description}

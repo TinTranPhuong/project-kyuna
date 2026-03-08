@@ -15,13 +15,13 @@ export function useGreeting() {
     const hour = new Date().getHours();
 
     if (hour >= 5 && hour < 12) {
-      return { greeting: 'Good morning', emoji: '☀️' };
+      return { greeting: 'Good morning',   emoji: '☀️' };
     } else if (hour >= 12 && hour < 18) {
       return { greeting: 'Good afternoon', emoji: '🌤️' };
     } else if (hour >= 18 && hour < 21) {
-      return { greeting: 'Good evening', emoji: '🌆' };
+      return { greeting: 'Good evening',   emoji: '🌆' };
     } else {
-      return { greeting: 'Good night', emoji: '🌙' };
+      return { greeting: 'Good night',     emoji: '🌙' };
     }
   };
 

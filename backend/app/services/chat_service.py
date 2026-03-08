@@ -109,7 +109,7 @@ async def delete_conversation(db: AsyncSession, user_id: str, conversation_id: s
         
     await db.commit()
 
-async def save_message(db: AsyncSession, conversation_id: str, role: str, content: str, tokens_used: int = None, generation_ms: int = None, model: str = None) -> ChatMessage:
+async def save_message(db: AsyncSession, conversation_id: str, role: str, content: str, tokens_used: int = None, generation_ms: int = None, model: str = None, image_base64: str = None) -> ChatMessage:
     """Saves a single message and updates the conversation's message count and updated_at timestamp."""
     message = ChatMessage(
         conversation_id=conversation_id,
@@ -117,7 +117,8 @@ async def save_message(db: AsyncSession, conversation_id: str, role: str, conten
         content=content,
         tokens_used=tokens_used,
         generation_ms=generation_ms,
-        model_used=model
+        model_used=model,
+        image_base64=image_base64
     )
     db.add(message)
     
@@ -137,7 +138,7 @@ async def verify_and_save_user_message(db: AsyncSession, user_id: str, conversat
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
         
-    await save_message(db, conversation_id, role="user", content=data.content)
+    await save_message(db, conversation_id, role="user", content=data.content, image_base64=data.image_base64)
     
     # Auto-title on the very first user message
     if conversation.message_count == 1 and conversation.title == "New Conversation":
@@ -233,10 +234,21 @@ async def stream_chat_response(db: AsyncSession, user_id: str, conversation_id: 
     messages_payload = []
     if combined_system:
         messages_payload.append({"role": "system", "content": combined_system})
+    
+    is_vision = bool(conversation.messages and conversation.messages[-1].image_base64)
     for msg in conversation.messages:
-        messages_payload.append({"role": msg.role, "content": msg.content})
+        if msg.image_base64:
+            messages_payload.append({
+                "role": msg.role,
+                "content": [
+                    {"type": "image_url", "image_url": {"url": msg.image_base64}},
+                    {"type": "text", "text": msg.content}
+                ]
+            })
+        else:
+            messages_payload.append({"role": msg.role, "content": msg.content})
 
-    # ── NEW STEP 3: emit memory metadata SSE event before tokens ─────────────
+    # ── Emit memory metadata SSE event before tokens ─────────────
     yield f"data: {json.dumps({'memory_context': {'memories': len(memories), 'chunks': len(doc_chunks), 'universals': len(universals)}})}\n\n"
 
     # ── Stream AI response ────────────────────────────────────────────────────
@@ -244,7 +256,7 @@ async def stream_chat_response(db: AsyncSession, user_id: str, conversation_id: 
     stream_start = time.time()
 
     try:
-        async for token in ai_client.chat_stream(messages_payload, target_model):
+        async for token in ai_client.chat_stream(messages_payload, target_model, is_vision=is_vision):
             accumulated_content.append(token)
             yield f"data: {json.dumps({'token': token})}\n\n"
 
@@ -267,7 +279,7 @@ async def stream_chat_response(db: AsyncSession, user_id: str, conversation_id: 
                 model=target_model
             )
 
-        # ── NEW STEP 4: queue extraction (non-blocking, throttled) ────────────
+        # ── Queue extraction (non-blocking, throttled) ────────────
         should_extract = (
             settings.EXTRACTION_ENABLED
             and conversation.message_count % settings.EXTRACTION_EVERY_N_TURNS == 0

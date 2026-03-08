@@ -90,7 +90,7 @@ async def get_user_stats(db: AsyncSession, user_id: str) -> dict:
         "sessions_today": sessions_today,
         "current_streak": current_streak,
         "longest_streak": longest_streak,
-        "chart_data": [] # Populated dynamically by the chart endpoint if needed, but schema requires it
+        "chart_data": [] 
     }
 
 
@@ -112,8 +112,7 @@ async def get_daily_chart_data(db: AsyncSession, user_id: str, days: int) -> Lis
     # Aggregate by date string
     daily_totals = defaultdict(int)
     for s in sessions:
-        date_str = s.started_at.strftime("%a") # e.g., "Mon", "Tue"
-        # Use full date as key first to ensure accurate grouping, then format
+        date_str = s.started_at.strftime("%a") 
         full_date = s.started_at.date()
         daily_totals[full_date] += s.duration_minutes
 

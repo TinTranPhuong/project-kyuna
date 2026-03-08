@@ -3,17 +3,17 @@ from app.services.chunking_service import count_tokens
 class ContextAssembler:
     def build(
         self,
-        universals: list,        # UniversalFact ORM objects (from PostgreSQL)
-        memories: list[dict],    # Qdrant results [{score, payload}]
-        doc_chunks: list[dict],  # Qdrant results [{score, payload}]
+        universals: list,        
+        memories: list[dict],    
+        doc_chunks: list[dict],  
         token_budget: int = 3200,
     ) -> str:
         if not universals and not memories and not doc_chunks:
-            return ""   # new user, no memory yet — return empty string, not placeholder text
+            return ""
 
         sections = []
 
-        # 1. Universal facts — ALWAYS included, never trimmed
+        # Universal facts — ALWAYS included, never trimmed
         universal_text = self._format_universals(universals)
         if universal_text:
             sections.append(f"=== Always Remember ===\n{universal_text}")
@@ -21,7 +21,7 @@ class ContextAssembler:
         used_tokens = count_tokens("\n\n".join(sections)) if sections else 0
         remaining = token_budget - used_tokens
 
-        # 2. Memories — trim lowest scores first if needed
+        # Memories — trim lowest scores first if needed
         memory_text = self._fit_results(memories, remaining // 2, "raw_text")
         if memory_text:
             sections.append(f"=== Relevant Context From Past Conversations ===\n{memory_text}")
@@ -29,7 +29,7 @@ class ContextAssembler:
             used_tokens = count_tokens("\n\n".join(sections))
             remaining = token_budget - used_tokens
 
-        # 3. Document chunks — trim lowest scores first
+        # Document chunks — trim lowest scores first
         chunk_text = self._fit_results(doc_chunks, remaining, "content", include_source=True)
         if chunk_text:
             sections.append(f"=== Document Context ===\n{chunk_text}")

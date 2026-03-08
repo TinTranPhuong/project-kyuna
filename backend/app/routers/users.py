@@ -78,8 +78,6 @@ async def update_settings(
 
 
 # ── Wallpaper File Upload ─────────────────────────────────────────────────────
-# Instead of storing base64 in PostgreSQL (breaks at >5MB due to localStorage
-# and JSON body limits), we save the file to disk and store only the URL path.
 
 from fastapi import UploadFile, File
 from fastapi.responses import FileResponse

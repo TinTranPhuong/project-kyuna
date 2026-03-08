@@ -63,7 +63,7 @@ export const StatCard = ({ title, value, unit, icon, color, trend }: StatCardPro
       {/* Subtle background glow effect */}
       <div className={cn(
         "absolute -bottom-10 -right-10 w-32 h-32 rounded-full blur-3xl opacity-10 group-hover:opacity-20 transition-opacity pointer-events-none",
-        colorMap[color].split(' ')[1] // Extract the bg color utility
+        colorMap[color].split(' ')[1] 
       )} />
     </div>
   );

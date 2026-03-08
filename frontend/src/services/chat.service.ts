@@ -1,19 +1,18 @@
 import axiosInstance from '@/lib/axios';
 import { useAuthStore } from '@/store/authStore';
+import { useChatStore } from '@/store/chatStore';
 
 // --- Types ---
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
-  // FIX: These backend fields are now optional.
-  // Optimistic messages created in the store before the server responds only need
-  // id/role/content. Real messages loaded from the API will have all fields.
   timestamp?: string;
   conversation_id?: string;
   tokens_used?: number | null;
   generation_ms?: number | null;
   model_used?: string | null;
+  image_base64?: string | null;
   created_at?: string;
 }
 
@@ -30,7 +29,11 @@ export interface ConversationWithMessages extends Conversation {
 export interface ModelInfo {
   id: string;
   name: string;
-  context_length: number;
+  type: 'text' | 'vision';
+  size?: string;
+  context_window?: number;
+  description?: string;
+  is_loaded?: boolean;
 }
 
 // --- Service ---
@@ -56,6 +59,11 @@ export const chatService = {
     await axiosInstance.delete(`/api/v1/chat/conversations/${id}`);
   },
 
+  updateConversation: async (id: string, updates: { title?: string; system_prompt?: string }): Promise<Conversation> => {
+    const response = await axiosInstance.patch<Conversation>(`/api/v1/chat/conversations/${id}`, updates);
+    return response.data;
+  },
+
   getModels: async (): Promise<ModelInfo[]> => {
     const response = await axiosInstance.get<ModelInfo[]>('/api/v1/chat/models');
     return response.data;
@@ -64,7 +72,9 @@ export const chatService = {
   sendMessageStream: async function* (
     conversationId: string,
     content: string,
-    model: string
+    model: string,
+    signal?: AbortSignal,
+    imageBase64?: string
   ): AsyncGenerator<string> {
     const token = useAuthStore.getState().token;
 
@@ -76,8 +86,8 @@ export const chatService = {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        // FIX: backend schema uses model_used, not model
-        body: JSON.stringify({ content, model_used: model }),
+        body: JSON.stringify({ content, model_used: model, image_base64: imageBase64 }),
+        signal,
       }
     );
 
@@ -87,8 +97,6 @@ export const chatService = {
     const decoder = new TextDecoder();
     if (!reader) return;
 
-    // Buffer carries over any incomplete line from the previous chunk.
-    // ReadableStream chunks can split mid-line, so we must never split on raw chunks.
     let buffer = '';
 
     while (true) {
@@ -98,7 +106,6 @@ export const chatService = {
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
 
-      // Keep the last (potentially incomplete) line in the buffer
       buffer = lines.pop() ?? '';
 
       for (const line of lines) {
@@ -109,8 +116,10 @@ export const chatService = {
 
           try {
             const parsed = JSON.parse(data);
-            // Skip memory_context metadata events — only yield actual tokens
-            if (parsed.memory_context) continue;
+            if (parsed.memory_context) {
+              useChatStore.getState().setMemoryContext(parsed.memory_context);
+              continue;
+            }
             if (parsed.token) yield parsed.token;
           } catch {
             yield data;

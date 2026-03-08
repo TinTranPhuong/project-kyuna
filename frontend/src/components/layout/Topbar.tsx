@@ -7,7 +7,6 @@ export const Topbar = () => {
   const { greeting, emoji } = useGreeting();
   const user = useAuthStore(state => state.user);
 
-  // THE FIX: Only render the greeting if we are on the main "Focus" page
   if (location.pathname !== '/') {
     return null; 
   }

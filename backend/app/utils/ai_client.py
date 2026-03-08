@@ -31,6 +31,7 @@ class AIServerClient:
         model: str,
         max_tokens: int | None = None,   # None → AI server uses its .env MAX_TOKENS
         temperature: float = 0.7,
+        is_vision: bool = False,
     ) -> AsyncGenerator[str, None]:
         """
         POST /v1/chat/completions with stream=True.
@@ -43,6 +44,9 @@ class AIServerClient:
             "stream": True,
             "temperature": temperature,
         }
+        if is_vision:
+            payload["is_vision"] = True
+            
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
 

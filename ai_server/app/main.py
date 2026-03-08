@@ -33,8 +33,8 @@ app.include_router(memory_router.router, prefix="/v1", tags=["memory"])
 @app.get("/v1/health", tags=["system"])
 async def health():
     return {
-        "status": "ok",
-        "model_loaded": model_manager.is_model_loaded(),
-        "model_name": model_manager.current_model_name,
+        "status"       : "ok",
+        "model_loaded" : model_manager.is_model_loaded(),
+        "model_name"   : model_manager.current_model_name,
         "vram_usage_mb": model_manager.get_vram_usage(),
     }

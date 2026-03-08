@@ -31,13 +31,13 @@ export const YouTubeEmbed = forwardRef<YouTubePlayerRef, YouTubeEmbedProps>(
     const isReadyRef = useRef(false);
 
     const extractId = (fullUrl: string) => {
-      // 1. THE FIX: If the URL is empty, load a silent dummy video so the iframe doesn't crash permanently!
-      if (!fullUrl) return { id: 'jfKfPfyJRdk', isPlaylist: false }; 
+      // If the URL is empty, load a silent dummy video so the iframe doesn't crash permanently!
+      if (!fullUrl) return { id: 'jfKfPfyJRdk', isPlaylist: false };
       try {
         const parsed = new URL(fullUrl);
         const list = parsed.searchParams.get('list');
         if (list) return { id: list, isPlaylist: true };
-      } catch {}
+      } catch { }
       const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=|\?v=)([^#&?]*).*/;
       const match = fullUrl.match(regExp);
       if (match && match[2].length === 11) return { id: match[2], isPlaylist: false };
@@ -48,7 +48,7 @@ export const YouTubeEmbed = forwardRef<YouTubePlayerRef, YouTubeEmbedProps>(
     useEffect(() => {
       if (!containerRef.current) return;
 
-      containerRef.current.innerHTML = ''; 
+      containerRef.current.innerHTML = '';
       const ytDiv = document.createElement('div');
       containerRef.current.appendChild(ytDiv);
 
@@ -56,16 +56,17 @@ export const YouTubeEmbed = forwardRef<YouTubePlayerRef, YouTubeEmbedProps>(
         const { id, isPlaylist } = extractId(url);
 
         playerRef.current = new window.YT.Player(ytDiv, {
-          height: '10', 
-          width: '10',  
+          height: '10',
+          width: '10',
+          ...(isPlaylist ? {} : { videoId: id }),
           playerVars: {
-            autoplay: 0, 
+            autoplay: 0,
             controls: 0,
             modestbranding: 1,
             playsinline: 1,
-            enablejsapi: 1, // THE FIX: Explicitly turns on API remote control
+            enablejsapi: 1,
             origin: window.location.origin,
-            ...(isPlaylist ? { listType: 'playlist', list: id } : { videoId: id }),
+            ...(isPlaylist ? { listType: 'playlist', list: id } : {}),
           },
           events: {
             onReady: (event: any) => {
@@ -87,7 +88,7 @@ export const YouTubeEmbed = forwardRef<YouTubePlayerRef, YouTubeEmbedProps>(
               console.error("YouTube Error:", e.data);
               // Only auto-skip if the error is 150 (copyright restricted) or 101/100 (not found)
               if (e.data === 150 || e.data === 101 || e.data === 100) {
-                  if (playerRef.current?.nextVideo) playerRef.current.nextVideo();
+                if (playerRef.current?.nextVideo) playerRef.current.nextVideo();
               }
             },
           },
@@ -108,14 +109,14 @@ export const YouTubeEmbed = forwardRef<YouTubePlayerRef, YouTubeEmbedProps>(
         if (playerRef.current?.destroy) playerRef.current.destroy();
         isReadyRef.current = false;
       };
-    }, []); // <-- EMPTY DEPENDENCY ARRAY: Never destroys the iframe!
+    }, []);
 
     // --- SEAMLESS TRACK SWITCHING ---
     useEffect(() => {
       if (isReadyRef.current && playerRef.current && url) {
         const { id, isPlaylist } = extractId(url);
         if (isPlaylist) {
-          playerRef.current.loadPlaylist({ list: id });
+          playerRef.current.loadPlaylist({ listType: 'playlist', list: id });
         } else {
           // loadVideoById automatically plays the video!
           playerRef.current.loadVideoById(id);
@@ -130,10 +131,10 @@ export const YouTubeEmbed = forwardRef<YouTubePlayerRef, YouTubeEmbedProps>(
       }
     }, [volume]);
 
-    // --- SMART PLAY/PAUSE (THE RACE CONDITION FIX) ---
+    // --- SMART PLAY/PAUSE  ---
     useEffect(() => {
       if (!isReadyRef.current || !playerRef.current) return;
-      
+
       if (isPlaying) {
         const state = playerRef.current.getPlayerState?.();
         // Only trigger manual play if explicitly paused (2) or cued (5).
@@ -156,10 +157,10 @@ export const YouTubeEmbed = forwardRef<YouTubePlayerRef, YouTubeEmbedProps>(
     }));
 
     return (
-      <div 
-        ref={containerRef} 
-        className="absolute w-[10px] h-[10px] opacity-0 pointer-events-none overflow-hidden z-[-1]" 
-        aria-hidden="true" 
+      <div
+        ref={containerRef}
+        className="absolute w-[10px] h-[10px] opacity-0 pointer-events-none overflow-hidden z-[-1]"
+        aria-hidden="true"
       />
     );
   }

@@ -11,8 +11,20 @@ from llama_cpp import Llama
 from app.core.config import settings
 from llama_cpp.llama_chat_format import Qwen3VLChatHandler
 
+# Per-model vision config: maps model filename → (mmproj file, chat handler class)
+VISION_MODEL_CONFIG = {
+    "Qwen3VL-8B-Instruct-Q8_0.gguf": {
+        "mmproj": "mmproj-Qwen3VL-8B-Instruct-F16.gguf",
+        "handler": Qwen3VLChatHandler,
+    },
+    "Qwen3.5-35B-A3B-UD-IQ3_S.gguf": {
+        "mmproj": "mmproj-F32.gguf",
+        "handler": Qwen3VLChatHandler,
+    },
+}
+
 # ══════════════════════════════════════════════════════════════════════════
-#  .env Parsers (From your test.py)
+#  .env Parsers 
 # ══════════════════════════════════════════════════════════════════════════
 def _b(k, d="false"): return os.environ.get(k, str(d)).strip().lower() in ("true", "1", "yes")
 def _i(k, d):
@@ -22,8 +34,6 @@ def _f(k, d):
     try:    return float(os.environ.get(k, str(d)))
     except: return float(d)
 
-
-# Dedicated thread for all Llama/CUDA operations to prevent VRAM fragmentation
 _LLAMA_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
     max_workers=1,
     thread_name_prefix="llama_cuda_worker"
@@ -47,8 +57,7 @@ def _windows_force_vram_release():
     gc.collect()
 
 class ModelManager:
-    """Thread-safe singleton managing GGUF model lifecycles with strict VRAM Hangoff Protocol."""
-    
+    """Thread-safe singleton managing GGUF model lifecycles with strict VRAM Hangoff Protocol."""  
     def __init__(self):
         # --- Text Model Slot ---
         self._model: Llama | None = None
@@ -176,18 +185,19 @@ class ModelManager:
             self._vision_model_name = None
             _windows_force_vram_release()
 
-    def _load_vision_sync(self, model_path: str, model_name: str, mmproj_path: str):
+    def _load_vision_sync(self, model_path: str, model_name: str, mmproj_path: str, handler_cls=None):
         """Synchronous vision model load executed on the CUDA thread using safe defaults."""
-        chat_handler = Qwen3VLChatHandler(clip_model_path=mmproj_path)
+        handler_cls = handler_cls or Qwen3VLChatHandler
+        chat_handler = handler_cls(clip_model_path=mmproj_path)
 
         self._vision_model = Llama(
             model_path   = model_path,
             chat_handler = chat_handler,
             n_gpu_layers = _i("N_GPU_LAYERS", -1),
-            n_ctx        = 4096,   # Safe default, llama.cpp auto-scales this for images
+            n_ctx        = _i("N_CTX", 32768),   
             n_threads    = _i("N_THREADS", 8),
-            flash_attn   = False,  # MAGIC FIX: Restores exact bounding box coordinates!
-            verbose      = True,   # Turn on so we can see the C++ startup logs
+            flash_attn   = False,  
+            verbose      = True,  
         )
         self._vision_model_name = model_name
 
@@ -206,24 +216,33 @@ class ModelManager:
                 await loop.run_in_executor(_LLAMA_EXECUTOR, self._unload_vision_sync)
 
             model_path = Path(settings.MODELS_DIR) / model_name
-            mmproj_filename = getattr(settings, 'MMPROJ_FILE', None)
-            if mmproj_filename:
-                mmproj_path = Path(settings.MODELS_DIR) / mmproj_filename
+
+            # Look up per-model vision config, fall back to .env / glob
+            vision_cfg = VISION_MODEL_CONFIG.get(model_name)
+            if vision_cfg:
+                mmproj_path = Path(settings.MODELS_DIR) / vision_cfg["mmproj"]
+                handler_cls = vision_cfg["handler"]
             else:
-                mmproj_path = next(Path(settings.MODELS_DIR).glob("mmproj-*.gguf"), None)
+                mmproj_filename = getattr(settings, 'MMPROJ_FILE', None)
+                if mmproj_filename:
+                    mmproj_path = Path(settings.MODELS_DIR) / mmproj_filename
+                else:
+                    mmproj_path = next(Path(settings.MODELS_DIR).glob("mmproj-*.gguf"), None)
+                handler_cls = Qwen3VLChatHandler
 
             if not model_path.exists():
                 raise FileNotFoundError(f"Vision model not found: {model_path}")
             if not mmproj_path or not mmproj_path.exists():
                 raise FileNotFoundError(f"MMPROJ file not found: {mmproj_path}")
 
+            print(f"[Vision] Loading mmproj: {mmproj_path.name} with handler: {handler_cls.__name__}")
+
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(
                 _LLAMA_EXECUTOR, 
-                self._load_vision_sync, 
-                str(model_path), 
-                model_name,
-                str(mmproj_path)
+                lambda: self._load_vision_sync(
+                    str(model_path), model_name, str(mmproj_path), handler_cls
+                )
             )
 
     # ==========================================
@@ -243,7 +262,6 @@ class ModelManager:
         max_tokens: int | None = None,
         temperature: float | None = None,
         top_p: float | None = None,
-        # NEW: Allow overriding these parameters dynamically
         top_k: int | None = None,
         min_p: float | None = None,
         repeat_penalty: float | None = None,
@@ -257,7 +275,7 @@ class ModelManager:
         temperature = temperature if temperature is not None else _f("TEMPERATURE", 0.7)
         top_p = top_p if top_p is not None else _f("TOP_P", 0.9)
         
-        # UPDATED: Check argument first, then .env, then default
+        # Check argument first, then .env, then default
         top_k = top_k if top_k is not None else _i("TOP_K", 40)
         min_p = min_p if min_p is not None else _f("MIN_P", 0.05)
         repeat_penalty = repeat_penalty if repeat_penalty is not None else _f("REPEAT_PENALTY", 1.1)
@@ -275,7 +293,7 @@ class ModelManager:
                         temperature=temperature,
                         top_p=top_p,
                         top_k=top_k,
-                        min_p=min_p,         # Pass min_p to llama.cpp
+                        min_p=min_p,        
                         repeat_penalty=repeat_penalty,
                         stop=stop or [],
                         stream=True,

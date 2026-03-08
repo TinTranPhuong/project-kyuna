@@ -13,8 +13,6 @@ from app.core.database import engine, Base
 from app.routers import auth, users, sessions, chat, translator, note, dashboard, memory, documents
 from app.services.qdrant_service import qdrant_service
 
-# ── CRITICAL: Import every model so Base.metadata knows about ALL tables.
-# Without these imports, Base.metadata.create_all() will silently skip them.
 import app.models.user        # noqa: F401
 import app.models.session     # noqa: F401  ← UserSettings + PomodoroSession
 import app.models.note        # noqa: F401  ← Note
@@ -35,10 +33,10 @@ async def lifespan(app: FastAPI):
          meant it ran on shutdown, never on startup).
     """
     async with engine.begin() as conn:
-        # Step 1: Create any tables that don't exist yet (safe, idempotent).
+        # Create any tables that don't exist yet (safe, idempotent).
         await conn.run_sync(Base.metadata.create_all)
 
-        # Step 2: Add missing columns to user_settings.
+        # Add missing columns to user_settings.
         await conn.execute(text(
             "ALTER TABLE user_settings "
             "ADD COLUMN IF NOT EXISTS custom_wallpaper TEXT DEFAULT NULL"
@@ -48,21 +46,17 @@ async def lifespan(app: FastAPI):
             "ADD COLUMN IF NOT EXISTS music_groups TEXT DEFAULT NULL"
         ))
 
-    # Step 3: Ensure the file-upload directory exists.
+    # Ensure the file-upload directory exists.
     Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
 
-    # Step 4: Initialize Qdrant collections on startup.
-    # FIX: was placed AFTER yield — that made it run on shutdown, never on startup.
-    # Without this, all 3 collections never existed and memory retrieval silently
-    # returned [] on every chat message (documents could not be accessed by the AI).
+    # Initialize Qdrant collections on startup.
     try:
         await qdrant_service.ensure_collections()
     except Exception as e:
-        # Log but don't crash the server — Qdrant offline means memory is disabled,
-        # not that the whole application fails to start.
+        # Log but don't crash the server — Qdrant offline means memory is disabled.
         print(f"[Startup] Warning: Qdrant unavailable — memory features disabled. {e}")
 
-    yield  # ← application handles requests here
+    yield  
 
     # Shutdown: dispose the DB connection pool cleanly.
     await engine.dispose()

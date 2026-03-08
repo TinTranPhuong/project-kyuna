@@ -10,13 +10,9 @@ import NotepadModal from '@/components/notes/NotepadModal';
 
 export default function ToolsPage() {
   const navigate = useNavigate();
-  // State to toggle between the main tools grid and specific tool views
   const [activeView, setActiveView] = useState<'hub' | 'notes'>('hub');
-  
-  // Bring in your existing Zustand store exactly as it was
   const { notes, addNote, openNote, removeNote } = useNoteStore();
 
-  // --- 1. TOOLS HUB VIEW ---
   const renderHub = () => {
     const tools = [
       {
@@ -24,7 +20,7 @@ export default function ToolsPage() {
         name: 'Notes Gallery',
         description: 'Manage your quick thoughts, tasks, and code snippets in a visual grid.',
         icon: <StickyNote size={32} className="text-blue-400" />,
-        action: () => setActiveView('notes'), // Switches the view
+        action: () => setActiveView('notes'),
         gradient: 'from-blue-500/20 to-blue-900/10',
         hoverBorder: 'hover:border-blue-500/50',
       },

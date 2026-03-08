@@ -95,7 +95,6 @@ export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
       ...DEFAULTS,
-
       resetToDefaults: () => set({ ...DEFAULTS }),
 
       // ── Pull from PostgreSQL (called after login / page reload) ────────────

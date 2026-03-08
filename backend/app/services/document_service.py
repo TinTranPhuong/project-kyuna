@@ -56,7 +56,7 @@ class DocumentService:
                 return
                 
             try:
-                # 1. Determine file type and parse
+                # Determine file type and parse
                 file_path = Path(doc.original_path)
                 
                 if doc.file_type == "pdf":
@@ -75,17 +75,17 @@ class DocumentService:
                     await db.commit()
                     return
 
-                # 3. Chunk
+                # Chunk
                 chunks = semantic_chunk(full_text)
                 
-                # 4. Embed batch
+                # Embed batch
                 texts = [c.content for c in chunks]
                 vectors = await embedding_service.embed_batch(texts)
                 
                 if not vectors:
                     raise Exception("Embedding server offline or returned no vectors.")
 
-                # 5. Save to PostgreSQL + Qdrant
+                # Save to PostgreSQL + Qdrant
                 for i, (chunk, vector) in enumerate(zip(chunks, vectors)):
                     chunk_id = uuid.uuid4()
                     db_chunk = DocChunk(

@@ -13,15 +13,15 @@ type TimerPhase = 'work' | 'short_break' | 'long_break'
 interface TimerState {
   mode: TimerMode
   phase: TimerPhase
-  timeLeft: number           // seconds remaining in current phase
+  timeLeft: number           
   isRunning: boolean
-  sessionCount: number       // completed work sessions in the current cycle (resets every 4)
-  intervalId: ReturnType<typeof setInterval> | null   // NOT persisted
+  sessionCount: number       
+  intervalId: ReturnType<typeof setInterval> | null   
 
   // Stopwatch
   stopwatchMs: number
   lapTimes: number[]
-  stopwatchIntervalId: ReturnType<typeof setInterval> | null   // NOT persisted
+  stopwatchIntervalId: ReturnType<typeof setInterval> | null
 
   // Actions
   setMode: (mode: TimerMode) => void
@@ -30,7 +30,7 @@ interface TimerState {
   reset: () => void
   skip: () => void
   tick: () => void
-  restoreTimer: () => void   // call on app mount to restart interval if timer was running
+  restoreTimer: () => void
 
   // Stopwatch
   startStopwatch: () => void
@@ -50,7 +50,7 @@ export const useTimerStore = create<TimerState>()(
     (set, get) => ({
       mode: 'pomodoro',
       phase: 'work',
-      timeLeft: 1500,   // 25 minutes
+      timeLeft: 1500,   
       isRunning: false,
       sessionCount: 0,
       intervalId: null,
@@ -62,7 +62,6 @@ export const useTimerStore = create<TimerState>()(
       // ── Mode ──────────────────────────────────────────────────────────────
 
       setMode: (mode) => {
-        // Stop whichever timer is active before switching
         get().pause()
         get().stopStopwatch()
         set({ mode })
@@ -71,7 +70,7 @@ export const useTimerStore = create<TimerState>()(
       // ── Pomodoro Controls ─────────────────────────────────────────────────
 
       start: () => {
-        if (get().isRunning) return   // idempotent — ignore if already running
+        if (get().isRunning) return   
         const id = setInterval(() => get().tick(), 1000)
         set({ isRunning: true, intervalId: id })
       },
@@ -100,7 +99,6 @@ export const useTimerStore = create<TimerState>()(
           return
         }
 
-        // Phase ended — play sound, save session if it was a work phase, advance
         get().playNotificationSound()
         if (phase === 'work') {
           void get().saveCompletedSession()
@@ -109,7 +107,7 @@ export const useTimerStore = create<TimerState>()(
       },
 
       skip: () => {
-        get().pause()  // always stop the current interval before advancing phase
+        get().pause()  
 
         const { phase, sessionCount } = get()
         const settings = useSettingsStore.getState()
@@ -119,7 +117,6 @@ export const useTimerStore = create<TimerState>()(
 
         if (phase === 'work') {
           nextSessionCount += 1
-          // Every 4th completed work session earns a long break
           nextPhase = nextSessionCount % 4 === 0 ? 'long_break' : 'short_break'
         } else {
           nextPhase = 'work'
@@ -132,7 +129,6 @@ export const useTimerStore = create<TimerState>()(
 
         set({ phase: nextPhase, timeLeft: nextTime, sessionCount: nextSessionCount })
 
-        // Auto-start the next phase if the setting is enabled
         if (settings.autoStartBreaks) {
           get().start()
         }
@@ -154,7 +150,7 @@ export const useTimerStore = create<TimerState>()(
       // ── Stopwatch ──────────────────────────────────────────────────────────
 
       startStopwatch: () => {
-        if (get().stopwatchIntervalId) return   // already running
+        if (get().stopwatchIntervalId) return   
         const id = setInterval(() => {
           set(state => ({ stopwatchMs: state.stopwatchMs + 10 }))
         }, 10)
@@ -180,7 +176,6 @@ export const useTimerStore = create<TimerState>()(
 
       playNotificationSound: () => {
         if (!useSettingsStore.getState().notificationSound) return
-        // Fire-and-forget — errors (e.g. autoplay blocked) are intentionally ignored
         new Audio('/sounds/bell.mp3').play().catch(() => {})
       },
 

@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File,
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from pydantic import BaseModel  # <--- Added for request body validation
+from pydantic import BaseModel
 
 from app.core.config import settings
 from app.core.database import get_db, AsyncSessionLocal
@@ -26,7 +26,7 @@ router = APIRouter()
 MAGIC_BYTES = {
     "jpg": b"\xff\xd8\xff",
     "png": b"\x89\x50\x4e\x47",
-    "zip_pk": b"\x50\x4b",  # Also covers .cbz files
+    "zip_pk": b"\x50\x4b", 
 }
 
 # --- NEW MODEL FOR RENAME ---
@@ -382,7 +382,7 @@ async def get_translated_page(
 
 @router.get("/jobs/{job_id}/download")
 async def download_translated_job(
-    job_id: UUID,  # Fixed: was str, now UUID to match all other endpoints
+    job_id: UUID, 
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
@@ -391,8 +391,6 @@ async def download_translated_job(
     if not job or job.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    # Fixed: was called with (db, user_id, job_id) — wrong order & count.
-    # Correct signature: create_zip_stream(job_id, db)
     zip_stream = translator_service.create_zip_stream(job_id, db)
     return StreamingResponse(
         zip_stream,

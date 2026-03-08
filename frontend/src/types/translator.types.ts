@@ -13,11 +13,8 @@ export interface TranslationJob {
   created_at: string
   started_at: string | null
   completed_at: string | null
-  // NOTE: pages is NOT included in list/upload responses (JobResponse).
-  // Only TranslationJobDetail includes pages.
 }
 
-// Matches backend/app/schemas/translator.py → PageResponse
 export interface TranslationPage {
   id: string
   job_id: string
@@ -32,8 +29,32 @@ export interface TranslationPage {
   processing_ms: number | null
 }
 
-// Matches backend/app/schemas/translator.py → JobDetailResponse
-// This is what GET /jobs/{id} returns — includes pages array
 export interface TranslationJobDetail extends TranslationJob {
   pages: TranslationPage[]
 }
+
+// ── UI Types & Pipeline Streaming ──────────────────────────────────────────
+
+export type OverlayMode = 'dots' | 'text' | 'original';
+
+export interface PipelineRegion {
+  index: number;
+  bbox: [number, number, number, number];
+  japanese: string;
+  english?: string;
+}
+
+export type PhaseStatus = 'waiting' | 'running' | 'done' | 'failed';
+
+export interface PhaseState {
+  stage: number;
+  name: string;
+  status: PhaseStatus;
+  detail?: string;
+}
+
+export type PhaseEvent =
+  | { waiting: boolean }
+  | { stage: 0; status: 'failed'; error: string }
+  | { stage: 1 | 2 | 3 | 4 | 5; status: 'running' | 'done'; region_count?: number; done?: number; total?: number }
+  | { stage: 6; status: 'done'; regions: PipelineRegion[] };

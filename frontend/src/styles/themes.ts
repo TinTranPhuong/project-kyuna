@@ -1,10 +1,10 @@
 export interface Theme {
   name: string
   label: string
-  backgroundUrl: string        // path to video asset in /public/assets/backgrounds/
-  overlayOpacity: number       // 0.0 - 1.0
-  accentColor: string          // CSS color for theme-specific accents
-  previewImage: string         // static preview image for Settings page
+  backgroundUrl: string        
+  overlayOpacity: number       
+  accentColor: string          
+  previewImage: string         
 }
 
 export const THEMES: Record<string, Theme> = {

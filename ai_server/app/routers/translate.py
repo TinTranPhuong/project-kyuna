@@ -13,7 +13,6 @@ from app.services.vision_translation_service import translate_image_vision
 from app.services.model_manager import model_manager
 from app.core.config import settings
 
-# 🚨 New Phase 1 Pipeline Services
 from app.services.ocr_pipeline_service import ocr_pipeline_service
 from app.services.translation_pipeline_service import hangoff_protocol, translate_page
 
@@ -23,12 +22,12 @@ router = APIRouter()
 #  NEW PIPELINE ENDPOINTS (6-Stage Architecture)
 # ══════════════════════════════════════════════════════════════════════════
 
-# ─── Endpoint 1: Stages 1+2+3 — OCR Pipeline ─────────────────────────────────
+# ───  OCR Pipeline ───────────────────────────────────────────────────
 class OcrPipelineRequest(BaseModel):
-    image: str      # base64-encoded full manga page (JPEG or PNG)
+    image: str      
 
 class OcrPipelineResponse(BaseModel):
-    regions: list[dict]    # Each dict: {"index": int, "bbox": [x1,y1,x2,y2], "japanese": str}
+    regions: list[dict]    
     count: int
 
 @router.post("/translate/ocr-pipeline", response_model=OcrPipelineResponse)
@@ -43,7 +42,7 @@ async def ocr_pipeline(request: OcrPipelineRequest):
     if not getattr(settings, "DETECTOR_MODEL", None):
         raise HTTPException(503, "DETECTOR_MODEL not configured in .env")
 
-    # Decode base64 → temp file (only the full page is written, not crops)
+    # Decode base64 → temp file 
     image_data = base64.b64decode(request.image)
     suffix = ".png" if image_data[:4] == b"\x89PNG" else ".jpg"
     
@@ -62,22 +61,19 @@ async def ocr_pipeline(request: OcrPipelineRequest):
         return OcrPipelineResponse(regions=regions, count=len(regions))
     finally:
         if os.path.exists(tmp_path):
-            os.unlink(tmp_path)   # only the full-page temp file, no crop files exist
+            os.unlink(tmp_path)   
 
-
-# ─── Endpoint 2: Stages 4+5 — Hangoff + Translate (ONE PAGE AT A TIME) ───────
+# ─── Hangoff + Translate (ONE PAGE AT A TIME) ─────────────────────────────
 class TranslateBatchRequest(BaseModel):
     regions: list[dict]
-    # Each dict must have: index (int), bbox ([x1,y1,x2,y2]), japanese (str)
 
 class TranslateBatchResponse(BaseModel):
     regions: list[dict]
-    # Each dict has all input fields + english (str)
 
 @router.post("/translate/batch", response_model=TranslateBatchResponse)
 async def translate_batch(request: TranslateBatchRequest):
     """
-    Stages 4+5: Hangoff Protocol (if needed) + Qwen / OpenAI 20B translation.
+    Hangoff Protocol (if needed) + Sugoi 14B for translation.
     IMPORTANT — ONE PAGE PER CALL:
     The backend sends one page at a time. Do NOT aggregate multiple pages
     into one request. A 20-page CBZ = 20 separate calls to this endpoint.
@@ -92,21 +88,18 @@ async def translate_batch(request: TranslateBatchRequest):
         if "japanese" not in r or "index" not in r or "bbox" not in r:
             raise HTTPException(422, "Each region must have: index, bbox, japanese")
 
-    # Stage 4: Hangoff Protocol — runs only if LLM is not already loaded
     if not model_manager.is_translation_model_loaded:
         await hangoff_protocol()
 
-    # Stage 5: Translate this page's regions
     translated = await translate_page(request.regions)
     return TranslateBatchResponse(regions=translated)
 
-
 # ══════════════════════════════════════════════════════════════════════════
-#  LEGACY ENDPOINTS (Preserved for backwards compatibility)
+#  LEGACY ENDPOINTS 
 # ══════════════════════════════════════════════════════════════════════════
 
 # ==========================================
-# EXISTING FALLBACK ENDPOINT
+# FALLBACK ENDPOINT
 # ==========================================
 class TranslateRequest(BaseModel):
     image: str
@@ -133,20 +126,15 @@ async def translate_image(request: TranslateRequest):
             os.unlink(tmp_path)
 
 # ==========================================
-# HELPER: AUTO-DETECT VISION MODEL
+# AUTO-DETECT VISION MODEL
 # ==========================================
 async def ensure_vision_model_loaded():
-    """Helper to auto-detect Qwen3VL if .env is missing."""
     if not model_manager.is_vision_model_loaded:
         model_to_load = settings.VISION_MODEL
         
-        # Auto-detect fallback if .env is empty
         if not model_to_load:
             models_dir = Path(settings.MODELS_DIR)
-            # Look for any model containing 'Qwen3VL' in the name
-            vision_models = list(models_dir.glob("*Qwen3VL*.gguf"))
-            
-            # Filter out the mmproj file so we only get the main model
+            vision_models = list(models_dir.glob("*Sugoi-14B-Ultra-Q4_K_M*.gguf"))
             main_models = [m for m in vision_models if "mmproj" not in m.name.lower()]
             
             if main_models:
@@ -155,13 +143,12 @@ async def ensure_vision_model_loaded():
             else:
                 raise HTTPException(
                     status_code=503, 
-                    detail="503 Service Unavailable: No vision model configured in .env, and no Qwen3VL file found in the models directory."
-                )
-                
+                    detail="503 Service Unavailable: No vision model configured in .env, and no model file found in the models directory."
+                )              
         await model_manager.load_vision_model(model_to_load)
 
 # ==========================================
-# PHASE 1: VISION TRANSLATION SSE STREAMING
+# VISION TRANSLATION SSE STREAMING
 # ==========================================
 class TranslateStreamRequest(BaseModel):
     image: str
@@ -170,7 +157,6 @@ class TranslateStreamRequest(BaseModel):
 
 @router.post("/translate/image/stream")
 async def translate_image_stream(request: TranslateStreamRequest):
-    # Use the new bulletproof loader
     await ensure_vision_model_loaded()
         
     image_data = base64.b64decode(request.image)
@@ -194,14 +180,14 @@ async def translate_image_stream(request: TranslateStreamRequest):
         event_generator(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
+            "Cache-Control":     "no-cache",
             "X-Accel-Buffering": "no",
-            "Connection": "keep-alive",
+            "Connection":        "keep-alive",
         },
     )
 
 # ==========================================
-# PHASE 4: VISION DETECTION VALIDATOR
+# VISION DETECTION VALIDATOR
 # ==========================================
 class ValidateRequest(BaseModel):
     image: str
@@ -209,7 +195,7 @@ class ValidateRequest(BaseModel):
 
 @router.post("/translate/validate")
 async def validate_detection(request: ValidateRequest):
-    # Use the new bulletproof loader
+
     await ensure_vision_model_loaded()
         
     image_data = base64.b64decode(request.image)
@@ -233,9 +219,9 @@ async def validate_detection(request: ValidateRequest):
         event_generator(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
+            "Cache-Control":     "no-cache",
             "X-Accel-Buffering": "no",
-            "Connection": "keep-alive",
+            "Connection":        "keep-alive",
         },
     )
 
@@ -243,7 +229,7 @@ async def validate_detection(request: ValidateRequest):
 # SUPPORTED LANGUAGES
 # ==========================================
 SUPPORTED_LANGUAGES = [
-    {"code": "ja",   "name": "Japanese"},
+    {"code": "ja", "name": "Japanese"},
 ]
 
 @router.get("/translate/languages")

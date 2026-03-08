@@ -1,24 +1,19 @@
 import { Navigate, Outlet } from 'react-router-dom';
 import { Moon } from 'lucide-react';
 
-// Store (Will show an error until implemented)
 import { useAuthStore } from '@/store/authStore';
 
 export default function AuthLayout() {
-  // Check auth state from Zustand
   const user = useAuthStore((state) => state.user);
   const isAuthenticated = !!user;
 
-  // Immediate redirect for users who are already logged in
   if (isAuthenticated) {
     return <Navigate to="/" replace />;
   }
 
   return (
-    // Fast-loading dark gradient background (no heavy video/canvas elements)
     <div className="min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-surface-900 via-surface-800 to-black p-4">
       
-      {/* Centered glass morphism card (max-width exactly 420px as requested) */}
       <div className="w-full max-w-[420px] glass-card p-8 shadow-2xl flex flex-col relative z-10 animate-fade-in">
         
         {/* App Logo & Branding */}

@@ -91,29 +91,29 @@ export default function CalculatorModal({ onClose }: CalculatorModalProps) {
 
   // --- Button Configuration ---
   const buttons = [
-    { label: 'AC', onClick: handleClear, className: 'text-red-400 bg-white/5 hover:bg-white/10' },
+    { label: 'AC' , onClick: handleClear, className: 'text-red-400 bg-white/5 hover:bg-white/10' },
     { label: '+/-', onClick: handleToggleSign, className: 'text-white/70 bg-white/5 hover:bg-white/10' },
-    { label: '%', onClick: handlePercentage, className: 'text-white/70 bg-white/5 hover:bg-white/10' },
-    { label: '÷', onClick: () => handleOperator('/'), className: 'text-white bg-primary-600/80 hover:bg-primary-500' },
+    { label: '%'  , onClick: handlePercentage, className: 'text-white/70 bg-white/5 hover:bg-white/10' },
+    { label: '÷'  , onClick: () => handleOperator('/'), className: 'text-white bg-primary-600/80 hover:bg-primary-500' },
     
-    { label: '7', onClick: () => handleNum('7'), className: 'text-white hover:bg-white/10' },
-    { label: '8', onClick: () => handleNum('8'), className: 'text-white hover:bg-white/10' },
-    { label: '9', onClick: () => handleNum('9'), className: 'text-white hover:bg-white/10' },
-    { label: '×', onClick: () => handleOperator('*'), className: 'text-white bg-primary-600/80 hover:bg-primary-500' },
+    { label: '7'  , onClick: () => handleNum('7'), className: 'text-white hover:bg-white/10' },
+    { label: '8'  , onClick: () => handleNum('8'), className: 'text-white hover:bg-white/10' },
+    { label: '9'  , onClick: () => handleNum('9'), className: 'text-white hover:bg-white/10' },
+    { label: '×'  , onClick: () => handleOperator('*'), className: 'text-white bg-primary-600/80 hover:bg-primary-500' },
     
-    { label: '4', onClick: () => handleNum('4'), className: 'text-white hover:bg-white/10' },
-    { label: '5', onClick: () => handleNum('5'), className: 'text-white hover:bg-white/10' },
-    { label: '6', onClick: () => handleNum('6'), className: 'text-white hover:bg-white/10' },
-    { label: '-', onClick: () => handleOperator('-'), className: 'text-white bg-primary-600/80 hover:bg-primary-500 text-xl' },
+    { label: '4'  , onClick: () => handleNum('4'), className: 'text-white hover:bg-white/10' },
+    { label: '5'  , onClick: () => handleNum('5'), className: 'text-white hover:bg-white/10' },
+    { label: '6'  , onClick: () => handleNum('6'), className: 'text-white hover:bg-white/10' },
+    { label: '-'  , onClick: () => handleOperator('-'), className: 'text-white bg-primary-600/80 hover:bg-primary-500 text-xl' },
     
-    { label: '1', onClick: () => handleNum('1'), className: 'text-white hover:bg-white/10' },
-    { label: '2', onClick: () => handleNum('2'), className: 'text-white hover:bg-white/10' },
-    { label: '3', onClick: () => handleNum('3'), className: 'text-white hover:bg-white/10' },
-    { label: '+', onClick: () => handleOperator('+'), className: 'text-white bg-primary-600/80 hover:bg-primary-500 text-xl' },
+    { label: '1'  , onClick: () => handleNum('1'), className: 'text-white hover:bg-white/10' },
+    { label: '2'  , onClick: () => handleNum('2'), className: 'text-white hover:bg-white/10' },
+    { label: '3'  , onClick: () => handleNum('3'), className: 'text-white hover:bg-white/10' },
+    { label: '+'  , onClick: () => handleOperator('+'), className: 'text-white bg-primary-600/80 hover:bg-primary-500 text-xl' },
     
-    { label: '0', onClick: () => handleNum('0'), className: 'text-white hover:bg-white/10 col-span-2 rounded-2xl' },
-    { label: '.', onClick: handleDot, className: 'text-white hover:bg-white/10 text-xl' },
-    { label: '=', onClick: handleEqual, className: 'text-white bg-white/20 hover:bg-white/30 text-xl font-bold' },
+    { label: '0'  , onClick: () => handleNum('0'), className: 'text-white hover:bg-white/10 col-span-2 rounded-2xl' },
+    { label: '.'  , onClick: handleDot, className: 'text-white hover:bg-white/10 text-xl' },
+    { label: '='  , onClick: handleEqual, className: 'text-white bg-white/20 hover:bg-white/30 text-xl font-bold' },
   ];
 
   return createPortal(

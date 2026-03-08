@@ -26,7 +26,7 @@ class EmbeddingService:
             texts,
             batch_size=settings.EMBEDDING_BATCH_SIZE,
             show_progress_bar=False,
-            normalize_embeddings=True,    # nomic-embed-text requires this
+            normalize_embeddings=True,
         ).tolist()
 
 embedding_service = EmbeddingService()

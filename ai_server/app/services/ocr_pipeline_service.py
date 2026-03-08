@@ -1,36 +1,31 @@
 import gc
 import sys
 import cv2
-import torch # type: ignore
+import torch 
 import numpy as np
 from pathlib import Path
 from PIL import Image
 from app.core.config import settings
 
-# Inject the cloned comic-text-detector repo into the Python path
-# Resolves to: ai_server/app/utils/comic-text-detector
 DETECTOR_PATH = Path(__file__).parent.parent.parent / "comic-text-detector"
 sys.path.insert(0, str(DETECTOR_PATH))
 
 try:
-    from inference import TextDetector # type: ignore
+    from inference import TextDetector 
 except ImportError as e:
     print(f"Import Error: Could not load TextDetector. Ensure it is cloned at {DETECTOR_PATH}")
     print(f"Details: {e}")
 
 try:
-    from manga_ocr import MangaOcr # type: ignore
+    from manga_ocr import MangaOcr 
 except ImportError as e:
     print(f"Import Error: Could not load MangaOcr. Ensure it is installed via pip.")
 
-
 class OcrPipelineService:
     """
-    Merged Stage 1+2+3 singleton.
     Detection → in-memory PIL cropping → OCR, all in RAM.
     One call, zero disk writes, zero base64 crop round-trips.
     """
-    
     def __init__(self):
         self._detector = None
         self._ocr = None
@@ -39,8 +34,7 @@ class OcrPipelineService:
     def _load_detector(self) -> None:
         if self._detector is not None:
             return
-            
-        # settings.MODELS_DIR from config.py
+
         model_path = Path(settings.MODELS_DIR) / getattr(settings, "DETECTOR_MODEL", "comictextdetector.pt")
         
         if not model_path.exists():
@@ -60,17 +54,13 @@ class OcrPipelineService:
     def _load_ocr(self) -> None:
         if self._ocr is not None:
             return
-        # auto-downloads ~430MB from HuggingFace on first run
         self._ocr = MangaOcr()   
 
     # ── Main pipeline method ──────────────────────────────────────────────────
     def run(self, image_path: str) -> list[dict]:
         """
-        Stages 1+2+3 in a single call.
-        
         Args:
-            image_path: absolute path to the full manga page image on disk.
-            
+            image_path: absolute path to the full manga page image on disk.     
         Returns:
             [
               {"index": 0, "bbox": [x1, y1, x2, y2], "japanese": "どうした"},
@@ -83,7 +73,6 @@ class OcrPipelineService:
         self._load_ocr()
 
         # ── Stage 1: Detection ────────────────────────────────────────────────
-        # TextDetector expects a BGR numpy array (same as cv2.imread output)
         img_bgr = cv2.imread(image_path)
         if img_bgr is None:
             raise RuntimeError(f"Could not read image: {image_path}")
@@ -95,7 +84,6 @@ class OcrPipelineService:
             return []
 
         # ── Stage 2: In-memory PIL cropping ───────────────────────────────────
-        # Convert once to PIL RGB for cropping (no disk writes)
         img_pil = Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
         crops = []
         
@@ -132,13 +120,12 @@ class OcrPipelineService:
                 continue
                 
             regions.append({
-                "index": len(regions),   # re-index after empty-filter
+                "index": len(regions), 
                 "bbox":  bbox,
                 "japanese": text,
             })
 
         # Sort reading order: top-to-bottom primary, left-to-right secondary
-        # (Very basic sorting, assumes vertical manga flow)
         regions.sort(key=lambda r: (r["bbox"][1] // 50, r["bbox"][0]))
         
         # Final re-index after sort
@@ -163,14 +150,11 @@ class OcrPipelineService:
             
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-            torch.cuda.synchronize() # Wait for CUDA to actually clear
-            
+            torch.cuda.synchronize()            
         gc.collect()
 
     @property
     def is_loaded(self) -> bool:
         return self._detector is not None or self._ocr is not None
 
-
-# Singleton — import this in translation_pipeline_service and the router
 ocr_pipeline_service = OcrPipelineService()

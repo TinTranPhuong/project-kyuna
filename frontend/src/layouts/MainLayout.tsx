@@ -1,7 +1,5 @@
 import { Outlet, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-
-// Layout Components (Will show errors until implemented)
 import Sidebar from '@/components/layout/Sidebar';
 import Topbar from '@/components/layout/Topbar';
 import ThemeBackground from '@/components/ui/ThemeBackground';
