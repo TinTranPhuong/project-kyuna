@@ -1,8 +1,8 @@
 ﻿<div align="center">
 
-```
-KYUNA
-```
+
+# KYUNA
+
 
 **A fully local, self-hosted personal workspace with AI. No cloud. No subscriptions. No data leaving your machine.**
 
@@ -10,6 +10,7 @@ KYUNA
 [![React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react)](https://react.dev)
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python)](https://python.org)
 [![llama.cpp](https://img.shields.io/badge/llama.cpp-GGUF-8B5CF6?style=flat-square)](https://github.com/ggerganov/llama.cpp)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License](https://img.shields.io/badge/License-MIT-22C55E?style=flat-square)](LICENSE)
 
 </div>
