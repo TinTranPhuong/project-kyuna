@@ -51,28 +51,26 @@ async def list_models():
         presets.append({
             "filename": settings.CHAT_MODEL_THINKING,
             "display_name": "CHAT",
-            "description": "SHHHH, I'm overthinking",
-            "type": "chat",
+            "description": "Shhhh, I'm overthinking",
+            "type": "text",
         })
         added.add(settings.CHAT_MODEL_THINKING)
 
     data = []
     for preset in presets:
-        file_path = models_dir / preset["filename"]
-        if file_path.exists():
-            is_loaded = (
-                preset["filename"] == model_manager.current_model_name or
-                preset["filename"] == model_manager.current_vision_model_name
-            )
-            data.append(ModelCard(
-                id=preset["filename"],
-                name=preset["display_name"],
-                type=preset["type"],
-                description=preset["description"],
-                is_loaded=is_loaded,
-                size="0 GB",
-                context_window=0
-            ))
+        is_loaded = (
+            preset["filename"] == model_manager.current_model_name or
+            preset["filename"] == model_manager.current_vision_model_name
+        )
+        data.append(ModelCard(
+            id=preset["filename"],
+            name=preset["display_name"],
+            type=preset["type"],
+            description=preset["description"],
+            is_loaded=is_loaded,
+            size="0 GB",
+            context_window=0
+        ))
 
     return ModelsResponse(data=data)
 

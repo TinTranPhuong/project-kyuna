@@ -9,7 +9,6 @@ _ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
 
 class AISettings(BaseSettings):
     DEFAULT_MODEL: str = ""
-    CHAT_MODEL: str = ""
     CHAT_MODEL_FAST: str = ""
     CHAT_MODEL_THINKING: str = ""
     TRANSLATION_MODEL: str = ""
@@ -47,4 +46,6 @@ settings = AISettings()
 
 # Print on startup so you can confirm the path is correct
 print(f"[Config] Loading .env from: {_ENV_FILE}")
-print(f"[Config] MAX_TOKENS={settings.MAX_TOKENS}  N_CTX={settings.N_CTX}  CHAT_MODEL={settings.CHAT_MODEL}")
+print(f"[Config] MAX_TOKENS={settings.MAX_TOKENS}  N_CTX={settings.N_CTX}")
+print(f"[Config] FAST_MODEL={settings.CHAT_MODEL_FAST}")
+print(f"[Config] THINK_MODEL={settings.CHAT_MODEL_THINKING}")

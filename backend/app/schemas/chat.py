@@ -9,6 +9,8 @@ class ChatMessageRequest(BaseModel):
     model_used: Optional[str] = None  
     image_base64: Optional[str] = None
     
+    model_config = ConfigDict(protected_namespaces=())
+    
 class CreateConversationRequest(BaseModel):
     title: Optional[str] = None
     system_prompt: Optional[str] = None
@@ -23,7 +25,7 @@ class ConversationResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, protected_namespaces=())
 
 
 class MessageResponse(BaseModel):
@@ -37,13 +39,13 @@ class MessageResponse(BaseModel):
     image_base64: Optional[str] = None
     created_at: datetime
     
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, protected_namespaces=())
 
 
 class ConversationDetailResponse(ConversationResponse):
     messages: List[MessageResponse]
     
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, protected_namespaces=())
 
 
 class SendMessageRequest(BaseModel):

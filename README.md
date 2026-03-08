@@ -123,9 +123,10 @@ The AI server wraps `llama.cpp` GGUF models behind a FastAPI service. It uses a 
 
 | Slot                           | Purpose                                        |
 |--------------------------------|------------------------------------------------|
-| `CHAT_MODEL`                   | Conversational AI — primary Kyuna persona      |
-| `TRANSLATION_MODEL`            | OCR / Vision LLM                               |
-| `VISION_MODEL` + `MMPROJ_FILE` | Vision / multimodal understanding              |
+| `CHAT_MODEL_FAST`              | Fast vision/chat model                         |
+| `CHAT_MODEL_THINKING`          | Heavy reasoning chat model                     |
+| `TRANSLATION_MODEL`            | Specialized translation LLM                    |
+| `VISION_MODEL` + `MMPROJ_FILE` | Multimodal understanding                       |
 | `DETECTOR_MODEL`               | Comic text bubble detection (PyTorch)          |
 | `EMBEDDING_MODEL`              | Sentence embeddings for RAG (nomic-embed-text) |
 
@@ -194,10 +195,11 @@ stop_kyuna.bat
 MODELS_DIR=D:\models
 
 # Model filenames — must exist in MODELS_DIR
-CHAT_MODEL=llm.gguf
-VISION_MODEL=llm.gguf
-TRANSLATE_MODEL=llm.gguf
-MMPROJ_FILE=mmproj-llm.gguf
+CHAT_MODEL_FAST=llm_fast.gguf
+CHAT_MODEL_THINKING=llm_thinking.gguf
+TRANSLATE_MODEL=llm_translate.gguf
+VISION_MODEL=llm_fast.gguf
+MMPROJ_FILE=mmproj-llm_fast.gguf
 EMBEDDING_MODEL=nomic-embed-text-v1.5.Q8_0.gguf
 
 # Inference

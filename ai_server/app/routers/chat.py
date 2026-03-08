@@ -89,7 +89,7 @@ async def chat_completions(request: ChatCompletionRequest):
     """
     
     # ── 1. Determine Target Model ────────────────────────────────────────────
-    target_model = request.model or getattr(settings, "CHAT_MODEL", None) or settings.DEFAULT_MODEL
+    target_model = request.model or getattr(settings, "CHAT_MODEL_THINKING", None) or settings.DEFAULT_MODEL
 
     if not target_model:
         raise HTTPException(503, "No model specified and no default configured.")
