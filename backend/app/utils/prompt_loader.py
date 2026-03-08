@@ -23,30 +23,34 @@ Folder layout:
 
 from pathlib import Path
 import logging
+from dotenv import dotenv_values
 
 logger = logging.getLogger(__name__)
 
 # Prompts root is always relative to this file:
-# ai_server/app/utils/prompt_loader.py → ai_server/app/prompts/
 _PROMPTS_DIR = Path(__file__).resolve().parents[3] / "ai_server" / "app" / "prompts"
 
-# ── Model → Prompt mapping ──────────────────────────────────────────────────
 # Key   : exact GGUF filename (must match .env / models.py preset)
 # Value : path relative to prompts/ WITHOUT the .md extension
-MODEL_PROMPT_MAP: dict[str, str] = {
-    "Qwen3VL-8B-Instruct-Q8_0.gguf":  "chats/fast",
-    "Qwen3.5-35B-A3B-UD-IQ3_S.gguf":  "chats/thinking",
-    "Sugoi-14B-Ultra-Q4_K_M.gguf":    "translation",
-}
+MODEL_PROMPT_MAP: dict[str, str] = {}
 
+# Dynamically read the AI Server's .env file
+_ai_env_path = _PROMPTS_DIR.parent.parent.parent / "ai_server" / ".env"
+if _ai_env_path.exists():
+    _ai_env_config = dotenv_values(_ai_env_path)
+    
+    _fast_model = _ai_env_config.get("CHAT_MODEL_FAST")
+    if _fast_model:
+        MODEL_PROMPT_MAP[_fast_model] = "chats/fast"
+        
+    _thinking_model = _ai_env_config.get("CHAT_MODEL_THINKING")
+    if _thinking_model:
+        MODEL_PROMPT_MAP[_thinking_model] = "chats/thinking"
+        
+    _translation_model = _ai_env_config.get("TRANSLATION_MODEL")
+    if _translation_model:
+        MODEL_PROMPT_MAP[_translation_model] = "translation"
 
-# ── Sampling note for Qwen3.5-35B-A3B (thinking model) ────────────────────────
-# Per official model card, thinking mode is ON by default.
-# Recommended params: temperature=1.0, top_p=0.95, top_k=20, presence_penalty=1.5
-# These should be set in your .env or overridden per-request in chat.py.
-# DO NOT pass chat_template_kwargs: {enable_thinking: False} — that disables it.
-# ───────────────────────────────────────────────────────────────────────────────
-# In-memory cache: { "chats/fast": "You are a fast assistant..." }
 _cache: dict[str, str] = {}
 
 

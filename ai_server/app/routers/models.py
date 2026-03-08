@@ -35,20 +35,26 @@ async def list_models():
     if not models_dir.exists():
         return ModelsResponse(data=[])
 
-    presets = [
-        {
-            "filename": "Qwen3VL-8B-Instruct-Q8_0.gguf",
-            "display_name": "FAST",
-            "description": "fast and can see things",
+    presets = []
+    added = set()
+    
+    if getattr(settings, 'CHAT_MODEL_FAST', None) and settings.CHAT_MODEL_FAST not in added:
+        presets.append({
+            "filename": settings.CHAT_MODEL_FAST,
+            "display_name": "VISION",
+            "description": "I'm fast as fuck boi!",
             "type": "vision",
-        },
-        {
-            "filename": "Qwen3.5-35B-A3B-UD-IQ3_S.gguf",
-            "display_name": "THINKING",
-            "description": "use for difficult tasks",
-            "type": "vision",
-        }
-    ]
+        })
+        added.add(settings.CHAT_MODEL_FAST)
+        
+    if getattr(settings, 'CHAT_MODEL_THINKING', None) and settings.CHAT_MODEL_THINKING not in added:
+        presets.append({
+            "filename": settings.CHAT_MODEL_THINKING,
+            "display_name": "CHAT",
+            "description": "SHHHH, I'm overthinking",
+            "type": "chat",
+        })
+        added.add(settings.CHAT_MODEL_THINKING)
 
     data = []
     for preset in presets:

@@ -10,6 +10,8 @@ _ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
 class AISettings(BaseSettings):
     DEFAULT_MODEL: str = ""
     CHAT_MODEL: str = ""
+    CHAT_MODEL_FAST: str = ""
+    CHAT_MODEL_THINKING: str = ""
     TRANSLATION_MODEL: str = ""
     DETECTOR_MODEL: str = ""
     VISION_MODEL: str = ""
