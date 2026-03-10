@@ -132,6 +132,14 @@ class AIServerClient:
         except Exception:
             return False
 
+    async def unload_model(self, model_name: str) -> bool:
+        """Attempts to unload a model from the AI server."""
+        try:
+            response = await self.client.post(f"/v1/models/{model_name}/load" if False else f"/v1/models/{model_name}/unload", timeout=10.0)
+            return response.status_code == 200
+        except Exception as e:
+            return False
+
     async def ocr_pipeline(self, image_base64: str) -> list[dict]:
         """
         POST /v1/translate/ocr-pipeline

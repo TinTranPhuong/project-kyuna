@@ -1,6 +1,18 @@
 import { create } from 'zustand';
 import { chatService, Message, Conversation } from '@/services/chat.service';
+import { agentService, PlanStep } from '@/services/agent.service';
 import { useSettingsStore } from './settingsStore';
+
+export interface AgentState {
+  runId: string;
+  planSteps: PlanStep[];
+  planStatus: 'pending' | 'approved' | 'cancelled';
+  pendingConfirmation: { tool: string; args: any } | null;
+  toolResults: Record<string, any>;
+  toolStatus: Record<string, 'running' | 'done' | 'error'>;
+  isRunning: boolean;
+  activeAgents: string[];
+}
 
 interface ChatState {
   conversations: Conversation[];
@@ -9,8 +21,10 @@ interface ChatState {
   isStreaming: boolean;
   currentStreamContent: string;
   selectedModel: string;
+  selectedMode: 'fast' | 'thinking' | 'agentic';
   abortController: AbortController | null;
   lastMemoryContext: { memories: number; chunks: number; universals: number } | null;
+  agentState: AgentState | null;
 
   loadConversations: () => Promise<void>;
   selectConversation: (id: string) => Promise<void>;
@@ -20,9 +34,18 @@ interface ChatState {
   sendMessage: (content: string, imageBase64?: string) => Promise<void>;
   stopGeneration: () => void;
   setModel: (model: string) => void;
+  setMode: (mode: 'fast' | 'thinking' | 'agentic') => void;
   appendStreamToken: (token: string) => void;
   finalizeStream: (fullContent: string) => void;
   setMemoryContext: (context: { memories: number; chunks: number; universals: number } | null) => void;
+
+  setAgentState: (partial: Partial<AgentState> | null) => void;
+  editPlanStep: (index: number, newDescription: string) => void;
+  removePlanStep: (index: number) => void;
+  approvePlan: (steps: PlanStep[], enableConsensus?: boolean) => Promise<void>;
+  cancelPlan: () => Promise<void>;
+  confirmTool: () => Promise<void>;
+  cancelTool: () => Promise<void>;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -32,8 +55,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   isStreaming: false,
   currentStreamContent: '',
   selectedModel: useSettingsStore.getState().chatModel || '',
+  selectedMode: (localStorage.getItem('kyuna_chat_mode') as any) || 'fast',
   abortController: null,
   lastMemoryContext: null,
+  agentState: null,
 
   loadConversations: async () => {
     try {
@@ -45,7 +70,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   selectConversation: async (id) => {
-    set({ activeConversationId: id, currentStreamContent: '' });
+    set({ activeConversationId: id, currentStreamContent: '', agentState: null });
     if (!get().messages[id]) {
       try {
         const conversationData = await chatService.getConversation(id);
@@ -64,7 +89,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       set((state) => ({
         conversations: [newConv, ...state.conversations],
         activeConversationId: newConv.id,
-        messages: { ...state.messages, [newConv.id]: [] }
+        messages: { ...state.messages, [newConv.id]: [] },
+        agentState: null
       }));
       return newConv;
     } catch (error) {
@@ -101,7 +127,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   sendMessage: async (content, imageBase64) => {
-    const { activeConversationId, selectedModel } = get();
+    const { activeConversationId, selectedModel, selectedMode } = get();
     if (!activeConversationId) return;
 
     const userMessage: Message = {
@@ -123,6 +149,87 @@ export const useChatStore = create<ChatState>((set, get) => ({
         [activeConversationId]: [...(state.messages[activeConversationId] || []), userMessage]
       }
     }));
+
+    if (selectedMode === 'agentic') {
+      let fullAssistantContent = '';
+      set({
+        agentState: {
+          runId: '', planSteps: [], planStatus: 'pending', pendingConfirmation: null, toolResults: {}, toolStatus: {}, isRunning: true, activeAgents: []
+        }
+      });
+
+      try {
+        const stream = agentService.sendAgenticMessageStream(activeConversationId, content, selectedModel, abortController.signal);
+        
+        for await (const payload of stream) {
+          if (payload.event === 'plan_ready') {
+            set((state) => ({
+              agentState: { ...state.agentState!, runId: payload.run_id, planSteps: payload.steps }
+            }));
+          } else if (payload.event === 'plan_approved') {
+            set((state) => ({
+              agentState: { ...state.agentState!, planSteps: payload.steps, planStatus: 'approved' }
+            }));
+          } else if (payload.event === 'tool_start') {
+            set((state) => ({
+              agentState: { ...state.agentState!, toolStatus: { ...state.agentState!.toolStatus, [payload.tool]: 'running' } }
+            }));
+          } else if (payload.event === 'tool_result') {
+            set((state) => ({
+              agentState: { 
+                ...state.agentState!, 
+                toolStatus: { ...state.agentState!.toolStatus, [payload.tool]: 'done' },
+                toolResults: { ...state.agentState!.toolResults, [payload.tool]: payload.result }
+              }
+            }));
+          } else if (payload.event === 'tool_error') {
+            set((state) => ({
+              agentState: { 
+                ...state.agentState!, 
+                toolStatus: { ...state.agentState!.toolStatus, [payload.tool]: 'error' },
+                toolResults: { ...state.agentState!.toolResults, [payload.tool]: payload.error }
+              }
+            }));
+          } else if (payload.event === 'confirmation_required') {
+            set((state) => ({
+              agentState: { ...state.agentState!, pendingConfirmation: { tool: payload.tool, args: payload.args } }
+            }));
+          } else if (payload.event === 'confirmation_cancelled') {
+            set((state) => ({
+              agentState: { 
+                ...state.agentState!, 
+                pendingConfirmation: null,
+                toolStatus: { ...state.agentState!.toolStatus, [payload.tool]: 'error' },
+                toolResults: { ...state.agentState!.toolResults, [payload.tool]: "SKIP" }
+              }
+            }));
+          } else if (payload.event === 'agent_start') {
+            set((state) => ({
+              agentState: { ...state.agentState!, activeAgents: [...state.agentState!.activeAgents, payload.agent] }
+            }));
+          } else if (payload.event === 'agent_end') {
+            set((state) => ({
+              agentState: { ...state.agentState!, activeAgents: state.agentState!.activeAgents.filter(a => a !== payload.agent) }
+            }));
+          } else if (payload.event === 'token') {
+             fullAssistantContent += payload.token;
+             get().appendStreamToken(payload.token);
+          } else if (payload.event === 'done') {
+             break;
+          }
+        }
+        get().finalizeStream(fullAssistantContent);
+        set((state) => ({ agentState: state.agentState ? { ...state.agentState, isRunning: false } : null }));
+      } catch (error: any) {
+        if (error.name === 'AbortError') {
+          get().finalizeStream(fullAssistantContent);
+        } else {
+          console.error('Agentic stream error:', error);
+          set({ isStreaming: false, abortController: null, agentState: null });
+        }
+      }
+      return;
+    }
 
     try {
       const stream = chatService.sendMessageStream(activeConversationId, content, selectedModel, abortController.signal, imageBase64);
@@ -151,6 +258,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   setModel: (model) => set({ selectedModel: model }),
+  setMode: (mode) => {
+    localStorage.setItem('kyuna_chat_mode', mode);
+    set({ selectedMode: mode });
+  },
 
   appendStreamToken: (token) => {
     set((state) => ({
@@ -160,7 +271,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   finalizeStream: (fullContent) => {
     const { activeConversationId } = get();
-    if (!activeConversationId) return;
+    if (!activeConversationId || !fullContent) return;
 
     const assistantMessage: Message = {
       id: (Date.now() + 1).toString(),
@@ -180,5 +291,67 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }));
   },
 
-  setMemoryContext: (context) => set({ lastMemoryContext: context })
+  setMemoryContext: (context) => set({ lastMemoryContext: context }),
+
+  setAgentState: (partial) => set((state) => ({ 
+    agentState: partial === null ? null : { ...state.agentState!, ...partial } 
+  })),
+
+  editPlanStep: (index, newDescription) => set((state) => {
+    if (!state.agentState) return state;
+    const newSteps = [...state.agentState.planSteps];
+    newSteps[index] = { ...newSteps[index], description: newDescription };
+    return { agentState: { ...state.agentState, planSteps: newSteps } };
+  }),
+
+  removePlanStep: (index) => set((state) => {
+    if (!state.agentState) return state;
+    const newSteps = [...state.agentState.planSteps];
+    newSteps.splice(index, 1);
+    return { agentState: { ...state.agentState, planSteps: newSteps } };
+  }),
+
+  approvePlan: async (steps, enableConsensus = false) => {
+    const state = get();
+    if (!state.agentState) return;
+    try {
+      await agentService.approvePlan(state.agentState.runId, steps, enableConsensus);
+    } catch (e) {
+      console.error(e);
+    }
+  },
+
+  cancelPlan: async () => {
+    const state = get();
+    if (!state.agentState) return;
+    try {
+      await agentService.cancelPlan(state.agentState.runId);
+      set({ agentState: null, isStreaming: false });
+    } catch (e) {
+      console.error(e);
+    }
+  },
+
+  confirmTool: async () => {
+    const state = get();
+    if (!state.agentState || !state.agentState.pendingConfirmation) return;
+    try {
+      await agentService.confirmTool(state.agentState.runId, state.agentState.pendingConfirmation.tool);
+      set((s) => ({ agentState: { ...s.agentState!, pendingConfirmation: null } }));
+    } catch (e) {
+      console.error(e);
+    }
+  },
+
+  cancelTool: async () => {
+    const state = get();
+    if (!state.agentState || !state.agentState.pendingConfirmation) return;
+    try {
+      await agentService.cancelTool(state.agentState.runId, state.agentState.pendingConfirmation.tool);
+      set((s) => ({ agentState: { ...s.agentState!, pendingConfirmation: null } }));
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
 }));

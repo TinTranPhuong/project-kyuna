@@ -11,13 +11,13 @@ if %errorLevel% neq 0 (
 )
 
 echo Starting Kyuna Qdrant Service...
-powershell -Command "Start-Service -Name KyunaQdrant -ErrorAction SilentlyContinue"
+powershell -Command "Stop-Service -Name KyunaQdrant -ErrorAction SilentlyContinue; Start-Service -Name KyunaQdrant -ErrorAction SilentlyContinue"
 
 echo Starting Kyuna Backend Service...
-powershell -Command "Start-Service -Name KyunaBackend"
+powershell -Command "Stop-Service -Name KyunaBackend -ErrorAction SilentlyContinue; Start-Service -Name KyunaBackend -ErrorAction SilentlyContinue"
 
 echo Starting Kyuna AI Server Service...
-powershell -Command "Start-Service -Name KyunaAIServer"
+powershell -Command "Stop-Service -Name KyunaAIServer -ErrorAction SilentlyContinue; Start-Service -Name KyunaAIServer -ErrorAction SilentlyContinue"
 
 echo Starting Kyuna Frontend (Background task)...
 powershell -Command "Start-Process node -WorkingDirectory '%~dp0frontend' -ArgumentList 'node_modules\vite\bin\vite.js preview --port=5173' -WindowStyle Hidden"

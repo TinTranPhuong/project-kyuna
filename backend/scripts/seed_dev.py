@@ -77,11 +77,10 @@ async def seed() -> None:
                 notes=f"Dev seed session {i + 1}",
             ))
 
-        # ── 5. Chat conversation + messages ───────────────────────────────────
         convo = ChatConversation(
             user_id=user.id,
             title="Dev Test Conversation",
-            model_used="Qwen3.5-35B-A3B-UD-IQ3_S.gguf",
+            model_used=os.environ.get("CHAT_MODEL_AGENT", "Qwen3.5-35B-A3B-UD-IQ3_S.gguf"),
             message_count=2,
         )
         db.add(convo)
@@ -96,7 +95,7 @@ async def seed() -> None:
             conversation_id=convo.id,
             role="assistant",
             content="Hello! I am Kyuna. Dev seed loaded successfully.",
-            model_used="Qwen3.5-35B-A3B-UD-IQ3_S.gguf",
+            model_used=os.environ.get("CHAT_MODEL_AGENT", "Qwen3.5-35B-A3B-UD-IQ3_S.gguf"),
         ))
 
         # ── 6. Translation job + pages ────────────────────────────────────────

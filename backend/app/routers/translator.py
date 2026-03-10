@@ -151,7 +151,7 @@ async def pipeline_progress(
         "detecting":   (1, "Detecting text regions"),
         "cropping":    (2, "Cropping bubbles"),
         "ocr":         (3, "Reading Japanese text"),
-        "translating": (5, "Translating with Qwen 35B"),
+        "translating": (5, f"Translating with {settings.TRANSLATION_MODEL}"),
         "done":        (6, "Complete"),
         "failed":      (0, "Failed"),
     }

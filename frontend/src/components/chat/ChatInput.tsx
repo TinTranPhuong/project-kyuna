@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Send, Square, Plus, X } from 'lucide-react';
 import { useChatStore } from '@/store/chatStore';
 import { cn } from '@/lib/utils';
+import { ModeSelector } from '@/components/chat/ModeSelector';
 
 export const ChatInput = () => {
   const [content, setContent] = useState('');
@@ -138,6 +139,7 @@ export const ChatInput = () => {
             disabled={isStreaming}
             className="flex-1 bg-transparent border-none outline-none text-white text-sm py-2 px-3 resize-none custom-scrollbar placeholder:text-white/40 disabled:cursor-not-allowed"
           />
+          <ModeSelector />
 
           <button
             onClick={isStreaming ? handleStop : handleSubmit}

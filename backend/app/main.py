@@ -10,7 +10,7 @@ from sqlalchemy import text
 from app.core.limiter import limiter
 from app.core.config import settings
 from app.core.database import engine, Base
-from app.routers import auth, users, sessions, chat, translator, note, dashboard, memory, documents
+from app.routers import auth, users, sessions, chat, translator, note, dashboard, memory, documents, agent
 from app.services.qdrant_service import qdrant_service
 
 import app.models.user        # noqa: F401
@@ -19,6 +19,7 @@ import app.models.note        # noqa: F401  ← Note
 import app.models.chat        # noqa: F401  ← ChatConversation + ChatMessage
 import app.models.translator  # noqa: F401  ← TranslationJob + TranslationPage
 import app.models.memory      # noqa: F401  ← MemoryFact, UniversalFact, Document, DocChunk, ExtractionJob
+import app.models.agent       # noqa: F401  ← Agent models
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -90,6 +91,7 @@ app.include_router(note.router,       prefix="/api/v1/notes",     tags=["notes"]
 app.include_router(dashboard.router,  prefix="/api/v1/dashboard", tags=["dashboard"])
 app.include_router(memory.router,     prefix="/api/v1/memory",    tags=["memory"])
 app.include_router(documents.router,  prefix="/api/v1/docs",      tags=["documents"])
+app.include_router(agent.router,      prefix="/api/v1/agent",     tags=["agent"])
 
 @app.get("/health")
 async def health_check():

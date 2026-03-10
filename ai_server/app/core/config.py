@@ -11,10 +11,13 @@ class AISettings(BaseSettings):
     DEFAULT_MODEL: str = ""
     CHAT_MODEL_FAST: str = ""
     CHAT_MODEL_THINKING: str = ""
+    CHAT_MODEL_AGENT: str = ""
     TRANSLATION_MODEL: str = ""
     DETECTOR_MODEL: str = ""
     VISION_MODEL: str = ""
     MMPROJ_FILE: str = ""
+    MMPROJ_FILE_QWEN3: str = ""
+    MMPROJ_FILE_QWEN35: str = ""
     MODELS_DIR: str = "./models"
     MIN_CONFIDENCE: float = 0
     N_GPU_LAYERS: int = -1

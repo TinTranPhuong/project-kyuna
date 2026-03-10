@@ -7,6 +7,11 @@ echo =========================================
 start "Kyuna Frontend" cmd /k "cd frontend && npm run dev"
 
 echo =========================================
+echo Starting Qdrant Vector DB
+echo =========================================
+start "Kyuna Qdrant" cmd /k "cd qdrant && qdrant.exe"
+
+echo =========================================
 echo Starting AI Server (Port 8001)
 echo =========================================
 start "Kyuna AI Server" cmd /k "cd ai_server && call venv\Scripts\activate && uvicorn app.main:app --host 0.0.0.0 --port 8001"

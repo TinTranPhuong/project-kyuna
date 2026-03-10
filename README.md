@@ -1,4 +1,4 @@
-﻿<div align="center">
+<div align="center">
 
 
 # KYUNA
@@ -19,7 +19,7 @@
 
 ## What is Kyuna?
 
-Kyuna is a personal web workspace with AI that runs entirely on your own GPU. It combines a conversational AI with long-term memory, a chatbot, and a document library — all in a single self-hosted application with zero external API calls.
+Kyuna is a personal web workspace with AI Agentic that runs entirely on your own GPU. It combines a conversational AI with long-term memory, a chatbot, and a document library — all in a single self-hosted application with zero external API calls.
 
 - **Chat** with a local LLM that remembers you across sessions via automatic fact extraction
 - **Translate** images to English using a 6-stage OCR + LLM pipeline
@@ -94,7 +94,26 @@ Three layers of memory, all user-editable from the `/memory` page:
 | **Universal facts**       | Promoted facts — always injected, never filtered out | PostgreSQL + Qdrant |
 | **Document library**      | Uploaded PDFs and text files, chunked and embedded   | PostgreSQL + Qdrant |
 
-### Manga Translation Pipeline
+### Agentic Mode (Autonomous Workflow Engine)
+
+Toggle **Agentic Mode** directly from the chat interface to transform Kyuna into an autonomous workflow engine. Rather than simply responding to a prompt, the system breaks your request down into an orchestrated, self-correcting 11-step pipeline distributed across your loaded models:
+
+1. **Context Gathering** (Memory Agent) — Retrieves history and facts from the Qdrant vector database.
+2. **Pre-Reflection** (Reflector Agent) — Analyzes conversational context before planning.
+3. **Orchestrator** (Orchestrator Agent) — Formulates a pure JSON step-by-step Execution Plan.
+4. **User Approval** — The UI halts execution until the user manually modifies or approves the plan.
+5. **Delegated Task Execution** (Sub-Agents) — Specific steps are executed using specialized system prompts:
+   - `Coding`, `Content Writing`, `Translator`, `Web Search`, `Analysis`
+6. **Execution Post-Reflection** (Reflector Agent) — Evaluates the results of the sub-agent tools.
+7. **Synthesis** (Synthesizer Agent) — Combines tool results into a coherent initial draft.
+8. **Evaluation** (Evaluator Agent) — Scores the draft against the original prompt using strict JSON criteria.
+9. **Consensus Strategy** (Consensus Agent) — Optional dual-agent debate system to cross-verify facts.
+10. **Final Reflection Gate** (Reflector Agent) — A strict redo-loop. If the output fails the criteria, the pipeline loops back to Synthesis (Step 7) up to 3 times.
+11. **Final Output** — The verified markdown is streamed to the chat window and saved to PostgreSQL.
+
+*Note: Agentic mode utilizes the **Hangoff Protocol** to seamlessly swap between your fast 14B model and your heavy 35B reasoning model mid-pipeline to maximize output quality without exceeding hardware VRAM bounds.*
+
+### Image Translation Pipeline
 
 A 6-stage pipeline for Image to Text translation:
 
@@ -125,6 +144,8 @@ The AI server wraps `llama.cpp` GGUF models behind a FastAPI service. It uses a 
 |--------------------------------|------------------------------------------------|
 | `CHAT_MODEL_FAST`              | Fast vision/chat model                         |
 | `CHAT_MODEL_THINKING`          | Heavy reasoning chat model                     |
+| `CHAT_MODEL_AGENT`             | Execution sub-agent model (Tool calling)       |
+| `CHAT_MODEL_ORCHESTRATOR`      | Agentic planning model                         |
 | `TRANSLATION_MODEL`            | Specialized translation LLM                    |
 | `VISION_MODEL` + `MMPROJ_FILE` | Multimodal understanding                       |
 | `DETECTOR_MODEL`               | Comic text bubble detection (PyTorch)          |
@@ -139,7 +160,7 @@ The AI server wraps `llama.cpp` GGUF models behind a FastAPI service. It uses a 
 | `POST /v1/embeddings`             | Text embeddings for RAG                            |
 | `POST /v1/models/{name}/load`     | Load a GGUF model by filename                      |
 | `POST /v1/models/{name}/unload`   | Unload a model and free VRAM                       |
-| `POST /v1/translate/ocr-pipeline` | Detect + OCR an image page                          |
+| `POST /v1/translate/ocr-pipeline` | Detect + OCR an image page                         |
 | `POST /v1/translate/batch`        | Translate OCR'd regions                            |
 | `POST /v1/translate/image/stream` | Vision LLM streaming translation                   |
 | `GET /v1/health`                  | Model status + VRAM usage                          |
@@ -197,6 +218,8 @@ MODELS_DIR=D:\models
 # Model filenames — must exist in MODELS_DIR
 CHAT_MODEL_FAST=llm_fast.gguf
 CHAT_MODEL_THINKING=llm_thinking.gguf
+CHAT_MODEL_AGENT=llm_subagent.gguf
+CHAT_MODEL_ORCHESTRATOR=llm_planner.gguf
 TRANSLATE_MODEL=llm_translate.gguf
 VISION_MODEL=llm_fast.gguf
 MMPROJ_FILE=mmproj-llm_fast.gguf

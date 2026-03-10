@@ -4,6 +4,10 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useChatStore } from '@/store/chatStore';
 import { ChatMessage } from './ChatMessage';
 import { TypingIndicator } from './TypingIndicator';
+import { AgentPlanPanel } from './AgentPlanPanel';
+import { AgentProgressBar } from './AgentProgressBar';
+import { AgentStatusPanel } from './AgentStatusPanel';
+import { ConfirmationModal } from './ConfirmationModal';
 import { cn } from '@/lib/utils';
 
 export const ChatWindow = () => {
@@ -112,6 +116,12 @@ export const ChatWindow = () => {
             <TypingIndicator />
           </div>
         )}
+        
+        {/* Agentic Mode Components */}
+        <AgentPlanPanel />
+        <AgentProgressBar />
+        <AgentStatusPanel />
+        <ConfirmationModal />
       </div>
 
       {/* Floating "Scroll to Bottom" Button */}

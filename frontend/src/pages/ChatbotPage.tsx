@@ -6,7 +6,6 @@ import { useChatStore } from '@/store/chatStore'
 import ChatWindow from '@/components/chat/ChatWindow'
 import ChatInput from '@/components/chat/ChatInput'
 import ConversationList from '@/components/chat/ConversationList'
-import { ModelSelector } from '@/components/chat/ModelSelector'
 import { ToolsPanel } from '@/components/chat/ToolsPanel'
 import { cn } from '@/lib/utils'
 
@@ -112,10 +111,6 @@ export default function ChatbotPage() {
             {/* Models & Tools */}
             <div className="flex-1 overflow-y-auto p-4 space-y-6">
               <section>
-                <h3 className="text-[11px] font-bold text-white/40 uppercase tracking-widest mb-3 px-1">Select Mode</h3>
-                <ModelSelector />
-              </section>
-              <section>
                 
               </section>
             </div>
@@ -141,10 +136,6 @@ export default function ChatbotPage() {
                 <ConversationList />
               </div>
               <div className="flex-1 overflow-y-auto p-4 space-y-6">
-                <section>
-                  <h3 className="text-[10px] font-bold text-white/40 uppercase tracking-widest mb-3 px-1">Select Mode</h3>
-                  <ModelSelector />
-                </section>
                 <ToolsPanel />
               </div>
             </motion.div>

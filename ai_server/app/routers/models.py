@@ -93,26 +93,27 @@ async def unload_model(model_name: str):
     is_vision = model_manager.current_vision_model_name == model_name
 
     if not is_text and not is_vision:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Model '{model_name}' is not currently loaded."
-        )
+        return {"status": "already_unloaded", "model": model_name}
 
     try:
+        import asyncio
+        from app.services.model_manager import _LLAMA_EXECUTOR
+        loop = asyncio.get_event_loop()
+        
         if is_text:
-            await model_manager.unload_model()
+            await loop.run_in_executor(_LLAMA_EXECUTOR, model_manager._unload_sync)
         elif is_vision:
-            await model_manager.unload_vision_model()
-    except AttributeError:
-        # Fallback: if model_manager doesn't have a dedicated unload method,
+            await loop.run_in_executor(_LLAMA_EXECUTOR, model_manager._unload_vision_sync)
+    except Exception:
+        # Fallback: if model_manager fails,
         # clear the reference and force garbage collection
         import gc
         if is_text:
             model_manager._model = None
-            model_manager.current_model_name = None
+            model_manager._current_model_name = None
         elif is_vision:
             model_manager._vision_model = None
-            model_manager.current_vision_model_name = None
+            model_manager._vision_model_name = None
         gc.collect()
         # Try to release GPU memory if llama_cpp is available
         try:

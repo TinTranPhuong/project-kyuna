@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -8,6 +8,7 @@ class ChatMessageRequest(BaseModel):
     content: str  
     model_used: Optional[str] = None  
     image_base64: Optional[str] = None
+    mode: Literal["fast", "thinking", "agentic"] = "fast"
     
     model_config = ConfigDict(protected_namespaces=())
     

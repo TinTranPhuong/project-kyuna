@@ -31,6 +31,9 @@ from app.models.user import User                                      # noqa: E4
 from app.models.chat import ChatConversation, ChatMessage             # noqa: E402, F401
 from app.models.session import PomodoroSession, UserSettings          # noqa: E402, F401
 from app.models.translator import TranslationJob, TranslationPage     # noqa: E402, F401
+from app.models.agent import AgentPlan, AgentRun                      # noqa: E402, F401
+from app.models.memory import MemoryFact, UniversalFact, Document, DocChunk, ExtractionJob # noqa: E402, F401
+from app.models.note import Note                                      # noqa: E402, F401
 
 # ── Alembic config ─────────────────────────────────────────────────────────────
 config = context.config

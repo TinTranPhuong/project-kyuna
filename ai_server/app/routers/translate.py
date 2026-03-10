@@ -134,7 +134,13 @@ async def ensure_vision_model_loaded():
         
         if not model_to_load:
             models_dir = Path(settings.MODELS_DIR)
-            vision_models = list(models_dir.glob("*Sugoi-14B-Ultra-Q4_K_M*.gguf"))
+            translation_model = settings.TRANSLATION_MODEL
+            
+            if translation_model:
+                vision_models = [Path(settings.MODELS_DIR) / translation_model]
+            else:
+                vision_models = list(models_dir.glob("*.gguf"))
+
             main_models = [m for m in vision_models if "mmproj" not in m.name.lower()]
             
             if main_models:

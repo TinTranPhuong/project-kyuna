@@ -11,17 +11,7 @@ from llama_cpp import Llama
 from app.core.config import settings
 from llama_cpp.llama_chat_format import Qwen3VLChatHandler
 
-# Per-model vision config: maps model filename → (mmproj file, chat handler class)
-VISION_MODEL_CONFIG = {
-    "Qwen3VL-8B-Instruct-Q8_0.gguf": {
-        "mmproj": "mmproj-Qwen3VL-8B-Instruct-F16.gguf",
-        "handler": Qwen3VLChatHandler,
-    },
-    "Qwen3.5-35B-A3B-UD-IQ3_S.gguf": {
-        "mmproj": "mmproj-F32.gguf",
-        "handler": Qwen3VLChatHandler,
-    },
-}
+
 
 # ══════════════════════════════════════════════════════════════════════════
 #  .env Parsers 
@@ -41,6 +31,13 @@ _LLAMA_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
 
 def _windows_force_vram_release():
     """Aggressively purges residual memory allocations on Windows."""
+    try:
+        import llama_cpp
+        llama_cpp.llama_backend_free()
+        llama_cpp.llama_backend_init(numa=False)
+    except Exception:
+        pass
+
     try:
         nvcuda = ctypes.WinDLL("nvcuda.dll")
         nvcuda.cuCtxSynchronize()
@@ -71,6 +68,26 @@ class ModelManager:
         
         # Shared concurrency limiter
         self._request_semaphore = asyncio.Semaphore(settings.MAX_CONCURRENT_REQUESTS)
+
+    @property
+    def vision_model_config(self):
+        config = {}
+        if settings.CHAT_MODEL_FAST:
+            config[settings.CHAT_MODEL_FAST] = {
+                "mmproj": getattr(settings, "MMPROJ_FILE_QWEN3", "mmproj-Qwen3VL-8B-Instruct-F16.gguf"),
+                "handler": Qwen3VLChatHandler,
+            }
+        if settings.CHAT_MODEL_THINKING:
+            config[settings.CHAT_MODEL_THINKING] = {
+                "mmproj": getattr(settings, "MMPROJ_FILE_QWEN35", "mmproj-F32.gguf"),
+                "handler": Qwen3VLChatHandler,
+            }
+        if settings.CHAT_MODEL_AGENT:
+            config[settings.CHAT_MODEL_AGENT] = {
+                "mmproj": getattr(settings, "MMPROJ_FILE_QWEN35", "mmproj-F32.gguf"),
+                "handler": Qwen3VLChatHandler,
+            }
+        return config
 
     # ==========================================
     # TEXT MODEL MANAGEMENT
@@ -218,7 +235,7 @@ class ModelManager:
             model_path = Path(settings.MODELS_DIR) / model_name
 
             # Look up per-model vision config, fall back to .env / glob
-            vision_cfg = VISION_MODEL_CONFIG.get(model_name)
+            vision_cfg = self.vision_model_config.get(model_name)
             if vision_cfg:
                 mmproj_path = Path(settings.MODELS_DIR) / vision_cfg["mmproj"]
                 handler_cls = vision_cfg["handler"]

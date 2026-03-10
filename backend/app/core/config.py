@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "./uploads"
     WALLPAPER_DIR: str = "./uploads/wallpapers"
     MAX_UPLOAD_SIZE_MB: int = 100
+    CHAT_MODEL_AGENT: str = ""
+    CHAT_MODEL_ORCHESTRATOR: str = ""
+    TRANSLATION_MODEL: str = ""
 
     # ── CORS ──────────────────────────────────────────────────────────────────
     ALLOWED_ORIGINS: Union[List[str], str] = ["http://localhost:5173"]
@@ -43,6 +46,20 @@ class Settings(BaseSettings):
     DOCS_UPLOAD_DIR: str = "D:\\project-kyuna\\uploads\\docs"
     MAX_DOC_SIZE_MB: int = 50
     EMBEDDING_DIMENSIONS: int = 768
+
+    # ── Agent Token Limits ────────────────────────────────────────────────────
+    AGENT_MAX_TOKENS_SYNTHESIZER: int = 8192
+    AGENT_MAX_TOKENS_ORCHESTRATOR: int = 16384
+    AGENT_MAX_TOKENS_MEMORY: int = 8192
+    AGENT_MAX_TOKENS_EVALUATOR: int = 8192
+    AGENT_MAX_TOKENS_CONSENSUS: int = 8192
+    AGENT_MAX_TOKENS_REFLECTOR: int = 16384
+    AGENT_MAX_TOKENS_ANALYSIS: int = 8192
+    AGENT_MAX_TOKENS_TRANSLATOR: int = 8192
+    AGENT_MAX_TOKENS_CODING: int = 16384
+    AGENT_MAX_TOKENS_WEB_SEARCH: int = 8192
+    AGENT_MAX_TOKENS_CONTENT_WRITING: int = 16384
+    AGENT_MAX_RETRIES: int = 3
 
     @field_validator("ALLOWED_ORIGINS", mode="before")
     @classmethod
