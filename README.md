@@ -310,7 +310,7 @@ project-kyuna/
 |--------------------|-----------------------------------------------------------------------------|
 | **Frontend**       | React 18 · Vite · TypeScript · Tailwind CSS · Zustand · Framer Motion       |
 | **Backend**        | FastAPI · SQLAlchemy (async) · PostgreSQL · asyncpg · Qdrant client · httpx |
-| **AI Server**      | llama.cpp · CUDA · PyTorch · MangaOCR · OpenCV                              |
+| **AI Server**      | llama.cpp · CUDA · PyTorch · OpenCV                              |
 | **Infrastructure** | NSSM (Windows services) · Qdrant native binary · PostgreSQL                 |
 
 ---

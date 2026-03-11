@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type UIEvent } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Bot, ArrowDown, Brain } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useChatStore } from '@/store/chatStore';
@@ -9,42 +9,31 @@ import { AgentProgressBar } from './AgentProgressBar';
 import { AgentStatusPanel } from './AgentStatusPanel';
 import { ConfirmationModal } from './ConfirmationModal';
 import { cn } from '@/lib/utils';
+import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
 
 export const ChatWindow = () => {
-  const { 
-    messages, 
+  const {
+    messages,
     activeConversationId,
-    isStreaming, 
+    isStreaming,
     currentStreamContent,
-    lastMemoryContext 
+    lastMemoryContext
   } = useChatStore();
-  
+
   const currentMessages = activeConversationId ? messages[activeConversationId] || [] : [];
-  
-  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const virtuosoRef = useRef<VirtuosoHandle>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const isAutoScrollEnabled = useRef(true);
 
   // --- Scroll Logic ---
   const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTo({
-        top: scrollRef.current.scrollHeight,
-        behavior,
+    if (virtuosoRef.current && currentMessages.length > 0) {
+      virtuosoRef.current.scrollToIndex({
+        index: currentMessages.length - 1,
+        align: 'end',
+        behavior: behavior === 'smooth' ? 'smooth' : 'auto'
       });
-    }
-  };
-
-  const handleScroll = (e: UIEvent<HTMLDivElement>) => {
-    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
-    const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-    
-    if (distanceFromBottom > 100) {
-      setShowScrollButton(true);
-      isAutoScrollEnabled.current = false;
-    } else {
-      setShowScrollButton(false);
-      isAutoScrollEnabled.current = true;
     }
   };
 
@@ -66,7 +55,7 @@ export const ChatWindow = () => {
       <div className="flex-1 flex flex-col items-center justify-center p-4 md:p-8 h-full w-full animate-in fade-in zoom-in-95 duration-500">
         <div className="bg-black/40 backdrop-blur-md border border-white/10 p-8 md:p-10 rounded-3xl flex flex-col items-center text-center max-w-md shadow-2xl">
           <div className="w-16 h-16 bg-white/10 rounded-2xl flex items-center justify-center mb-6 shadow-inner border border-white/5">
-            <Bot size={32} className="text-white shadow-lg" /> 
+            <Bot size={32} className="text-white shadow-lg" />
           </div>
           <h2 className="text-2xl font-bold text-white mb-3 drop-shadow-md tracking-wide">
             Start a conversation...
@@ -81,47 +70,60 @@ export const ChatWindow = () => {
 
   return (
     <div className="relative flex-1 flex flex-col h-full overflow-hidden">
-      
+
       {/* Scrollable message container */}
-      <div 
-        ref={scrollRef}
-        onScroll={handleScroll}
-        className="flex-1 overflow-y-auto px-4 py-6 space-y-4 custom-scrollbar"
-      >
-        {currentMessages.map((msg) => (
-          <ChatMessage 
-            key={msg.id} 
-            message={{
-              ...msg,
-              timestamp: (msg as any).timestamp || new Date().toISOString(),
-              tokens_used: msg.tokens_used ?? undefined 
-            }} 
-          />
-        ))}
+      <div className="flex-1 overflow-hidden relative">
+        <Virtuoso
+          ref={virtuosoRef}
+          className="h-full w-full custom-scrollbar"
+          data={currentMessages}
+          initialTopMostItemIndex={currentMessages.length - 1}
+          followOutput={() => isAutoScrollEnabled.current ? 'smooth' : false}
+          atBottomStateChange={(atBottom) => {
+            setShowScrollButton(!atBottom);
+            isAutoScrollEnabled.current = atBottom;
+          }}
+          itemContent={(_, msg) => (
+            <div className="px-4 py-2">
+              <ChatMessage
+                message={{
+                  ...msg,
+                  timestamp: (msg as any).timestamp || new Date().toISOString(),
+                  tokens_used: msg.tokens_used ?? undefined
+                }}
+              />
+            </div>
+          )}
+          components={{
+            Footer: () => (
+              <div className="px-4 py-2 space-y-4 pb-6">
+                {currentStreamContent && (
+                  <ChatMessage
+                    message={{
+                      id: 'streaming-msg',
+                      role: 'assistant',
+                      content: currentStreamContent,
+                      timestamp: new Date().toISOString()
+                    }}
+                    isStreaming={true}
+                  />
+                )}
 
-        {currentStreamContent && (
-          <ChatMessage 
-            message={{
-              id: 'streaming-msg',
-              role: 'assistant',
-              content: currentStreamContent,
-              timestamp: new Date().toISOString()
-            }} 
-            isStreaming={true}
-          />
-        )}
+                {isStreaming && !currentStreamContent && (
+                  <div className="flex justify-start">
+                    <TypingIndicator />
+                  </div>
+                )}
 
-        {isStreaming && !currentStreamContent && (
-          <div className="flex justify-start">
-            <TypingIndicator />
-          </div>
-        )}
-        
-        {/* Agentic Mode Components */}
-        <AgentPlanPanel />
-        <AgentProgressBar />
-        <AgentStatusPanel />
-        <ConfirmationModal />
+                {/* Agentic Mode Components */}
+                <AgentPlanPanel />
+                <AgentProgressBar />
+                <AgentStatusPanel />
+                <ConfirmationModal />
+              </div>
+            )
+          }}
+        />
       </div>
 
       {/* Floating "Scroll to Bottom" Button */}
@@ -150,7 +152,7 @@ export const ChatWindow = () => {
 
       {/* Memory Indicator */}
       {lastMemoryContext && !isStreaming && (lastMemoryContext.memories + lastMemoryContext.chunks + lastMemoryContext.universals > 0) && (
-        <div 
+        <div
           title={`${lastMemoryContext.memories} memories · ${lastMemoryContext.chunks} doc chunks · ${lastMemoryContext.universals} universal facts`}
           className="absolute bottom-2 right-4 text-xs bg-black/40 backdrop-blur-sm border border-white/10 px-3 py-1.5 rounded-full cursor-default flex items-center gap-1.5 text-white/50 hover:text-white/80 transition-colors shadow-lg z-20"
         >

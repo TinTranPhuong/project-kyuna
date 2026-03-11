@@ -12,13 +12,13 @@ import { cn } from '@/lib/utils'
 export default function ChatbotPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  
+
   const [isMobileOpen, setIsMobileOpen] = useState(false)
-  
+
   // Toggle Right Sidebar State (Defaults to closed)
   const [isRightOpen, setIsRightOpen] = useState(false)
 
-  const loadConversations  = useChatStore(state => state.loadConversations)
+  const loadConversations = useChatStore(state => state.loadConversations)
   const selectConversation = useChatStore(state => state.selectConversation)
   const createConversation = useChatStore(state => state.createConversation)
 
@@ -43,15 +43,15 @@ export default function ChatbotPage() {
 
       {/* Left Column (Main Chat Window) */}
       <div className="flex-1 flex flex-col h-full min-w-0 relative">
-        
+
         {/* Desktop Toggle Button for Right Sidebar */}
         <div className="hidden md:block absolute top-6 right-6 z-30">
           <button
             onClick={() => setIsRightOpen(!isRightOpen)}
             className={cn(
               "p-2.5 rounded-xl backdrop-blur-md border transition-all duration-200 shadow-xl flex items-center justify-center",
-              isRightOpen 
-                ? "bg-black/40 border-white/10 text-white hover:bg-black/60" 
+              isRightOpen
+                ? "bg-black/40 border-white/10 text-white hover:bg-black/60"
                 : "bg-black/20 border-white/5 text-white/50 hover:text-white hover:bg-black/40"
             )}
             title={isRightOpen ? "Close Workspace" : "Open Workspace"}
@@ -92,10 +92,10 @@ export default function ChatbotPage() {
         {/* Inner Content (Fixed width so it doesn't squish during slide animation) */}
         <div className="w-[320px] flex-1 flex flex-col h-full">
           <div className={cn(
-            "flex-1 flex flex-col transition-opacity duration-200", 
+            "flex-1 flex flex-col transition-opacity duration-200",
             isRightOpen ? "opacity-100 delay-100" : "opacity-0 pointer-events-none"
           )}>
-            
+
             <div className="p-4 shrink-0 pt-6">
               <button onClick={handleNewChat} className="w-full bg-primary-600 hover:bg-primary-500 transition-colors text-white rounded-lg flex items-center justify-center gap-2 py-3 shadow-lg shadow-primary-900/20">
                 <Plus className="w-5 h-5" />
@@ -104,15 +104,8 @@ export default function ChatbotPage() {
             </div>
 
             {/* Conversation List */}
-            <div className="h-[70%] overflow-y-auto border-y border-white/10 p-2">
+            <div className="flex-1 overflow-y-auto border-y border-white/10 p-2">
               <ConversationList />
-            </div>
-
-            {/* Models & Tools */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-6">
-              <section>
-                
-              </section>
             </div>
           </div>
         </div>

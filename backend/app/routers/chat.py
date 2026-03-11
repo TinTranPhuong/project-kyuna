@@ -89,6 +89,13 @@ async def send_message(
     """
     Send a message and stream the AI's response via Server-Sent Events (SSE).
     """
+    from app.utils.prompt_loader import get_model_for_mode
+    
+    if data.mode in ("fast", "thinking"):
+        env_model = get_model_for_mode(data.mode)
+        if env_model:
+            data.model_used = env_model
+
     # Verify access and save user's message
     await chat_service.verify_and_save_user_message(db, current_user.id, conversation_id, data)
  

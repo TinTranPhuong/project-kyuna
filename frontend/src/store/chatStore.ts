@@ -3,6 +3,8 @@ import { chatService, Message, Conversation } from '@/services/chat.service';
 import { agentService, PlanStep } from '@/services/agent.service';
 import { useSettingsStore } from './settingsStore';
 
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 export interface AgentState {
   runId: string;
   planSteps: PlanStep[];
@@ -160,7 +162,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       try {
         const stream = agentService.sendAgenticMessageStream(activeConversationId, content, selectedModel, abortController.signal);
-        
+
         for await (const payload of stream) {
           if (payload.event === 'plan_ready') {
             set((state) => ({
@@ -176,16 +178,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
             }));
           } else if (payload.event === 'tool_result') {
             set((state) => ({
-              agentState: { 
-                ...state.agentState!, 
+              agentState: {
+                ...state.agentState!,
                 toolStatus: { ...state.agentState!.toolStatus, [payload.tool]: 'done' },
                 toolResults: { ...state.agentState!.toolResults, [payload.tool]: payload.result }
               }
             }));
           } else if (payload.event === 'tool_error') {
             set((state) => ({
-              agentState: { 
-                ...state.agentState!, 
+              agentState: {
+                ...state.agentState!,
                 toolStatus: { ...state.agentState!.toolStatus, [payload.tool]: 'error' },
                 toolResults: { ...state.agentState!.toolResults, [payload.tool]: payload.error }
               }
@@ -196,8 +198,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
             }));
           } else if (payload.event === 'confirmation_cancelled') {
             set((state) => ({
-              agentState: { 
-                ...state.agentState!, 
+              agentState: {
+                ...state.agentState!,
                 pendingConfirmation: null,
                 toolStatus: { ...state.agentState!.toolStatus, [payload.tool]: 'error' },
                 toolResults: { ...state.agentState!.toolResults, [payload.tool]: "SKIP" }
@@ -212,10 +214,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
               agentState: { ...state.agentState!, activeAgents: state.agentState!.activeAgents.filter(a => a !== payload.agent) }
             }));
           } else if (payload.event === 'token') {
-             fullAssistantContent += payload.token;
-             get().appendStreamToken(payload.token);
+            fullAssistantContent += payload.token;
+            get().appendStreamToken(payload.token);
+            await sleep(15);
           } else if (payload.event === 'done') {
-             break;
+            break;
           }
         }
         get().finalizeStream(fullAssistantContent);
@@ -232,11 +235,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
 
     try {
-      const stream = chatService.sendMessageStream(activeConversationId, content, selectedModel, abortController.signal, imageBase64);
+      const stream = chatService.sendMessageStream(activeConversationId, content, selectedModel, selectedMode, abortController.signal, imageBase64);
       let fullAssistantContent = '';
       for await (const token of stream) {
         fullAssistantContent += token;
         get().appendStreamToken(token);
+        await sleep(15);
       }
       get().finalizeStream(fullAssistantContent);
     } catch (error: any) {
@@ -293,8 +297,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setMemoryContext: (context) => set({ lastMemoryContext: context }),
 
-  setAgentState: (partial) => set((state) => ({ 
-    agentState: partial === null ? null : { ...state.agentState!, ...partial } 
+  setAgentState: (partial) => set((state) => ({
+    agentState: partial === null ? null : { ...state.agentState!, ...partial }
   })),
 
   editPlanStep: (index, newDescription) => set((state) => {

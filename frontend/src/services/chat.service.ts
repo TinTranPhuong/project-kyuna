@@ -73,6 +73,7 @@ export const chatService = {
     conversationId: string,
     content: string,
     model: string,
+    mode: string,
     signal?: AbortSignal,
     imageBase64?: string
   ): AsyncGenerator<string> {
@@ -86,7 +87,7 @@ export const chatService = {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify({ content, model_used: model, image_base64: imageBase64 }),
+        body: JSON.stringify({ content, model_used: model, mode, image_base64: imageBase64 }),
         signal,
       }
     );

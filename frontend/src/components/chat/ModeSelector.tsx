@@ -9,10 +9,10 @@ export const ModeSelector: React.FC = () => {
   const { selectedMode, setMode } = useChatStore();
 
   const modes = [
-    { id: 'fast', name: 'Fast', icon: Zap, desc: 'Instant streaming, standard generation', color: undefined },
-    { id: 'thinking', name: 'Thinking', icon: BrainCircuit, desc: 'Extended reasoning with <think> blocks', color: undefined },
-    { id: 'agentic', name: 'Agentic', icon: Bot, desc: 'Multi-step planning and tool execution', color: 'text-amber-400' }
-  ] as const;
+    { id: 'fast', name: 'FAST', icon: Zap, desc: 'Im fast as fuck boi', color: 'text-blue-400' },
+    { id: 'thinking', name: 'THINKING', icon: BrainCircuit, desc: 'Shhh, Im overthinking', color: 'text-purple-400' },
+    { id: 'agentic', name: 'AGENTIC', icon: Bot, desc: 'Me and da bois at 3AM executing your tasks', color: 'text-amber-400' }
+  ] as const; 
 
   const currentMode = modes.find(m => m.id === selectedMode) || modes[0];
   const CurrentIcon = currentMode.icon;
@@ -20,12 +20,13 @@ export const ModeSelector: React.FC = () => {
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
-        <button className="flex items-center justify-center p-2 mb-1 mr-1 rounded-xl text-white/40 hover:text-white hover:bg-white/10 transition-colors outline-none shrink-0" title={`Mode: ${currentMode.name}`}>
-           <CurrentIcon size={18} className={currentMode.color || "text-white/60"} />
-           <ChevronDown size={14} className="ml-1 opacity-50" />
+        <button className="flex items-center justify-center gap-1.5 px-3 py-2 mb-1 mr-1 rounded-xl text-white/60 hover:text-white hover:bg-white/10 transition-colors outline-none shrink-0" title={`Mode: ${currentMode.name}`}>
+          <CurrentIcon size={16} className={currentMode.color} />
+          <span className="text-sm font-medium">{currentMode.name}</span>
+          <ChevronDown size={14} className="ml-1 opacity-50" />
         </button>
       </DropdownMenu.Trigger>
-      
+
       <DropdownMenu.Portal>
         <DropdownMenu.Content
           className="z-50 min-w-[220px] bg-surface-900 border border-white/10 rounded-xl p-1 shadow-2xl animate-in fade-in zoom-in-95 duration-100"
@@ -35,7 +36,7 @@ export const ModeSelector: React.FC = () => {
           <DropdownMenu.Label className="px-3 py-2 text-[10px] font-bold text-white/30 uppercase tracking-widest">
             Pipeline Mode
           </DropdownMenu.Label>
-          
+
           {modes.map((mode) => {
             const Icon = mode.icon;
             return (

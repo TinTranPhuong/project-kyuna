@@ -32,12 +32,17 @@ async def create_agent_run(
     """
     Generates a step-by-step plan for the user and emits via SSE. Includes Phase 2/3 pre-planning.
     """
-    conversation_id = body.get("conversation_id")
+    conversation_id_str = body.get("conversation_id")
     user_message = body.get("message")
     model_used = body.get("model_used")
     
-    if not conversation_id or not user_message:
+    if not conversation_id_str or not user_message:
         raise HTTPException(status_code=400, detail="conversation_id and message are required.")
+        
+    try:
+        conversation_id = UUID(conversation_id_str)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid conversation_id format.")
 
     plan = AgentPlan(conversation_id=conversation_id, user_id=current_user.id)
     db.add(plan)
@@ -65,13 +70,22 @@ async def create_agent_run(
     # Fetch recent conversation history
     from app.models.chat import ChatMessage
     stmt = select(ChatMessage).where(ChatMessage.conversation_id == conversation_id).order_by(ChatMessage.created_at.asc())
-    messages = (await db.execute(stmt)).scalars().all()
+    messages = list((await db.execute(stmt)).scalars().all())
     
+    from app.utils.response_utils import strip_think_tags
     history_lines = []
-    # Take the last 10 messages for context, excluding the current one if it was already saved
-    for msg in messages[-11:-1]: 
+    
+    # If the current user message was saved successfully, exclude it from the history
+    if messages and messages[-1].role == "user" and messages[-1].content == user_message:
+        past_messages = messages[:-1]
+    else:
+        past_messages = messages
+        
+    # Take the last 10 messages for context
+    for msg in past_messages[-10:]: 
         role = "User" if msg.role == "user" else "Assistant"
-        history_lines.append(f"{role}: {msg.content}")
+        content = strip_think_tags(msg.content).strip() if msg.role == "assistant" else msg.content
+        history_lines.append(f"{role}: {content}")
         
     conversation_history_str = "\n".join(history_lines) if history_lines else "No prior conversation history."
 
@@ -87,10 +101,13 @@ async def create_agent_run(
             from app.services.agents.reflector import reflect_mid
             from app.services.agents.orchestrator import WorkingMemory
             
+            # Fetch conversation history early for memory agent
+            history_ctx = _run_data[run_id_str].get("conversation_history", "")
+            
             # 1. Memory Agent
             await queue.put("data: " + json.dumps({'event': 'token', 'token': 'Gathering context layered memories...\n'}) + "\n\n")
             await queue.put("data: " + json.dumps({'event': 'agent_start', 'agent': 'memory'}) + "\n\n")
-            memory_ctx = await query_all_layers(user_id=current_user.id, query=user_message, db=db, model=model_used)
+            memory_ctx = await query_all_layers(user_id=current_user.id, query=user_message, conversation_history=history_ctx, db=db, model=model_used)
             await queue.put("data: " + json.dumps({'event': 'agent_end', 'agent': 'memory'}) + "\n\n")
             
             # 2. Reflector Mid

@@ -27,6 +27,10 @@ export default defineConfig({
       },
     },
   },
+  preview: {
+    port: 5173,
+    strictPort: true,
+  },
   build: {
     outDir: 'dist',
     sourcemap: false, // Disabled for production to minimize bundle size

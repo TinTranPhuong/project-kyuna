@@ -2,9 +2,9 @@
 echo Starting Kyuna complete stack for testing...
 
 echo =========================================
-echo Starting Frontend (Vite)
+echo Starting Frontend (Production Preview)
 echo =========================================
-start "Kyuna Frontend" cmd /k "cd frontend && npm run dev"
+start "Kyuna Frontend" cmd /k "cd frontend && npm run preview"
 
 echo =========================================
 echo Starting Qdrant Vector DB

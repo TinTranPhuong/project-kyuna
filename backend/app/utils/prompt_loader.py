@@ -36,6 +36,10 @@ MODEL_PROMPT_MAP: dict[str, str] = {}
 
 # Dynamically read the AI Server's .env file
 _ai_env_path = _PROMPTS_DIR.parent.parent.parent / "ai_server" / ".env"
+
+_fast_model: str | None = None
+_thinking_model: str | None = None
+
 if _ai_env_path.exists():
     _ai_env_config = dotenv_values(_ai_env_path)
     
@@ -50,6 +54,16 @@ if _ai_env_path.exists():
     _translation_model = _ai_env_config.get("TRANSLATION_MODEL")
     if _translation_model:
         MODEL_PROMPT_MAP[_translation_model] = "translation"
+
+def get_model_for_mode(mode: str) -> str | None:
+    """
+    Returns the model configured for the specified mode ('fast' or 'thinking').
+    """
+    if mode == "fast":
+        return _fast_model
+    elif mode == "thinking":
+        return _thinking_model
+    return None
 
 _cache: dict[str, str] = {}
 

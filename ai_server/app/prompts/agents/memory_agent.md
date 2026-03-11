@@ -6,9 +6,16 @@ Your task is to structure this retrieved context into a coherent summary that ex
 
 Input format:
 - User Query
-- Episodic Memories (Recent conversations)
+- Short-Term Conversation History (The exact immediate conversation)
+- Episodic Memories (Historical retrieved conversations)
 - Semantic Documents (Uploaded files)
 - Universal Facts (Permanent core knowledge)
 
 Output format (Plain Text):
-Provide a concise, unified summary of the useful information found in the memory layers. If a layer is empty, ignore it. If there is conflicts, highlight them. DO NOT hallucinate. Only use the provided facts.
+Provide a concise, unified summary of the useful information found in the memory layers AND the short-term conversation history. 
+
+CRITICAL RULES:
+1. **Short-Term Priority:** The Short-Term Conversation History is the HIGHEST priority source of truth. Always treat it as the most accurate and up-to-date context. Use Episodic or Semantic memories only to supplement missing background details.
+2. If a layer is empty, ignore it completely (do NOT write a disclaimer about it being empty if the answer is found in another layer like the short-term history). 
+3. If there are conflicts between layers, prioritize the short-term conversation history first, then universal facts.
+4. DO NOT hallucinate. Only use the provided facts or conversation history.

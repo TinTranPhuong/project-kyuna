@@ -19,7 +19,7 @@ class MemoryContext:
     universal: list
     formatted: str
 
-async def query_all_layers(user_id: str | uuid.UUID, query: str, db, model: str) -> MemoryContext:
+async def query_all_layers(user_id: str | uuid.UUID, query: str, conversation_history: str, db, model: str) -> MemoryContext:
     """
     Runs episodic, semantic, universal memory searches in parallel via asyncio.gather.
     Returns structurally assembled MemoryContext and calls the AI to format it.
@@ -37,7 +37,7 @@ async def query_all_layers(user_id: str | uuid.UUID, query: str, db, model: str)
          universal = await memory_service.get_universal_facts(db, user_id)
          
     prompt_instruction = load_prompt("agents/memory_agent")
-    system_prompt = f"{prompt_instruction}\n\nUser Query: {query}\n\nEpisodic: {episodic}\nSemantic: {semantic}\nUniversal: {universal}"
+    system_prompt = f"{prompt_instruction}\n\nUser Query: {query}\n\nShort-Term Conversation History:\n{conversation_history}\n\nEpisodic: {episodic}\nSemantic: {semantic}\nUniversal: {universal}"
     
     messages = [
         {"role": "system", "content": system_prompt},

@@ -158,35 +158,56 @@ export const ChatMessage = memo(({ message, isStreaming }: ChatMessageProps) => 
                     code({ node, inline, className, children, ...props }: any) {
                       const match = /language-(\w+)/.exec(className || '');
                       const codeString = String(children).replace(/\n$/, '');
+                      const isMultiLine = codeString.includes('\n');
 
-                      if (!inline && match) {
+                      if (!inline && (match || isMultiLine)) {
+                        const lang = match ? match[1] : '';
                         return (
-                          <div className="relative my-6 rounded-lg overflow-hidden border border-white/10 group/code">
-                            <div className="flex items-center justify-between px-4 py-2 bg-black/60 border-b border-white/5 backdrop-blur-md">
-                              <span className="text-[10px] font-mono text-white/50 uppercase tracking-widest">
-                                {match[1]}
-                              </span>
+                          <div className="relative my-6 rounded-lg overflow-hidden border border-white/10 group/code bg-black/40">
+                            {lang && (
+                              <div className="flex items-center justify-between px-4 py-2 bg-black/60 border-b border-white/5 backdrop-blur-md">
+                                <span className="text-[10px] font-mono text-white/50 uppercase tracking-widest">
+                                  {lang}
+                                </span>
+                                <button
+                                  onClick={() => handleCopy(codeString)}
+                                  className="text-white/40 hover:text-white transition-colors"
+                                >
+                                  {copied ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
+                                </button>
+                              </div>
+                            )}
+                            {!lang && (
                               <button
                                 onClick={() => handleCopy(codeString)}
-                                className="text-white/40 hover:text-white transition-colors"
+                                className="absolute top-3 right-3 text-white/40 hover:text-white transition-colors z-10 opacity-0 group-hover/code:opacity-100 bg-white/10 backdrop-blur-md p-1.5 rounded-md border border-white/10"
                               >
                                 {copied ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
                               </button>
-                            </div>
-                            <SyntaxHighlighter
-                              style={oneDark}
-                              language={match[1]}
-                              PreTag="div"
-                              customStyle={{ margin: 0, padding: '1rem', background: 'rgba(0,0,0,0.4)', fontSize: '13px' }}
-                              {...props}
-                            >
-                              {codeString}
-                            </SyntaxHighlighter>
+                            )}
+                            {lang ? (
+                              <SyntaxHighlighter
+                                style={oneDark}
+                                language={lang}
+                                PreTag="div"
+                                customStyle={{ margin: 0, padding: '1rem', background: 'transparent', fontSize: '13px' }}
+                                codeTagProps={{ style: { background: 'transparent', padding: 0, borderRadius: 0 } }}
+                                {...props}
+                              >
+                                {codeString}
+                              </SyntaxHighlighter>
+                            ) : (
+                              <pre className="p-4 m-0 overflow-x-auto text-[13px] font-mono text-white/80 whitespace-pre">
+                                <code className="block bg-transparent p-0 m-0 border-none" {...props}>
+                                  {codeString}
+                                </code>
+                              </pre>
+                            )}
                           </div>
                         );
                       }
                       return (
-                        <code className="bg-white/10 px-1.5 py-0.5 rounded text-primary-300 font-mono text-[13px]" {...props}>
+                        <code className="bg-white/10 px-1.5 py-0.5 rounded text-primary-300 font-mono text-[13px] border-none" {...props}>
                           {children}
                         </code>
                       );
