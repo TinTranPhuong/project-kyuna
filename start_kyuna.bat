@@ -1,29 +1,26 @@
 @echo off
-TITLE Start Kyuna Services
+echo Starting Kyuna complete stack for testing...
 
-:: Check for Administrator privileges (required to start Windows Services)
-net session >nul 2>&1
-if %errorLevel% neq 0 (
-    echo [ERROR] Administrative privileges required!
-    echo Please right-click this file and select "Run as administrator".
-    pause
-    exit /b 1
-)
+echo =========================================
+echo Starting Frontend (Production Preview)
+echo =========================================
+start "Kyuna Frontend" cmd /k "cd frontend && npm run preview"
 
-echo Starting Kyuna Qdrant Service...
-powershell -Command "Stop-Service -Name KyunaQdrant -ErrorAction SilentlyContinue; Start-Service -Name KyunaQdrant -ErrorAction SilentlyContinue"
+echo =========================================
+echo Starting Qdrant Vector DB
+echo =========================================
+start "Kyuna Qdrant" cmd /k "cd qdrant && qdrant.exe"
 
-echo Starting Kyuna Backend Service...
-powershell -Command "Stop-Service -Name KyunaBackend -ErrorAction SilentlyContinue; Start-Service -Name KyunaBackend -ErrorAction SilentlyContinue"
+echo =========================================
+echo Starting AI Server (Port 8001)
+echo =========================================
+start "Kyuna AI Server" cmd /k "cd ai_server && call venv\Scripts\activate && uvicorn app.main:app --host 0.0.0.0 --port 8001"
 
-echo Starting Kyuna AI Server Service...
-powershell -Command "Stop-Service -Name KyunaAIServer -ErrorAction SilentlyContinue; Start-Service -Name KyunaAIServer -ErrorAction SilentlyContinue"
+echo =========================================
+echo Starting Backend (Port 8000)
+echo =========================================
+start "Kyuna Backend" cmd /k "cd backend && call venv\Scripts\activate && uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
-echo Starting Kyuna Frontend (Background task)...
-powershell -Command "Start-Process node -WorkingDirectory '%~dp0frontend' -ArgumentList 'node_modules\vite\bin\vite.js preview --port=5173' -WindowStyle Hidden"
-
-echo.
-echo Kyuna Backend, AI Server, and Qdrant are now running as Windows Services!
-echo Kyuna Frontend is running completely in the background.
-echo.
+echo All services launched in separate windows!
+echo You can close this window now. The servers will keep running in their own windows.
 pause
