@@ -36,8 +36,8 @@ htmlcov/
 *.sqlite3
 
 # Vector Database
-qdrant/
-qdrant_storage/
+qdrant/storage/
+qdrant/snapshots/
 
 # Large AI model files (GGUF can be 4–8GB each)
 *.gguf
