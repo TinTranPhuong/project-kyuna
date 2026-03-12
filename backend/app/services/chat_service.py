@@ -152,18 +152,24 @@ async def auto_title_conversation(db: AsyncSession, conversation: ChatConversati
         
     from app.utils.prompt_loader import load_prompt
     system_instruction = load_prompt("chats/autotitle")
+    user_content = f"{first_user_message.strip()} /no_think"
+
     messages = [
         {"role": "system", "content": system_instruction},
-        {"role": "user",   "content": first_user_message},
+        {"role": "user",   "content": user_content},
     ]
     
     title_chunks = []
     try:
-        async for chunk in ai_client.chat_stream(messages, target_model, max_tokens=10):
+        async for chunk in ai_client.chat_stream(messages, target_model, max_tokens=20):
             title_chunks.append(chunk)
             
         generated_title = "".join(title_chunks).strip().strip('"').strip("'")
-        
+
+        import re
+        generated_title = re.sub(r'<think>.*?</think>', '', generated_title, flags=re.DOTALL).strip()
+        generated_title = generated_title.strip('"').strip("'").strip()
+
         if generated_title:
             conversation.title = generated_title
             await db.commit()

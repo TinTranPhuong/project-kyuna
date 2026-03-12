@@ -102,7 +102,7 @@ class TranslationPage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
-        # Added 'completed' to prevent constraint failure from our previous backend fixes!
+        # Permitted statuses include 'completed' to appropriately reflect successfully finished processing stages
         CheckConstraint(
             "processing_status IN ('pending', 'processing', 'done', 'completed', 'no_text', 'failed')", 
             name="chk_page_status"

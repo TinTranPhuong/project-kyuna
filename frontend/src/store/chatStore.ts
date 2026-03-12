@@ -23,7 +23,7 @@ interface ChatState {
   isStreaming: boolean;
   currentStreamContent: string;
   selectedModel: string;
-  selectedMode: 'fast' | 'thinking' | 'agentic';
+  selectedMode: 'fast' | 'thinking' | 'agentic' | 'creative';
   abortController: AbortController | null;
   lastMemoryContext: { memories: number; chunks: number; universals: number } | null;
   agentState: AgentState | null;
@@ -36,7 +36,7 @@ interface ChatState {
   sendMessage: (content: string, imageBase64?: string) => Promise<void>;
   stopGeneration: () => void;
   setModel: (model: string) => void;
-  setMode: (mode: 'fast' | 'thinking' | 'agentic') => void;
+  setMode: (mode: 'fast' | 'thinking' | 'agentic' | 'creative') => void;
   appendStreamToken: (token: string) => void;
   finalizeStream: (fullContent: string) => void;
   setMemoryContext: (context: { memories: number; chunks: number; universals: number } | null) => void;

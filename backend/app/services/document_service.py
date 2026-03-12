@@ -10,9 +10,6 @@ from app.models.memory import Document, DocChunk
 from app.services.embedding_service import embedding_service
 from app.services.qdrant_service import qdrant_service
 from app.services.chunking_service import semantic_chunk
-from app.services.parsers.pdf_parser import parse_pdf
-from app.services.parsers.docx_parser import parse_docx
-from app.services.parsers.text_parser import parse_txt
 logger = logging.getLogger(__name__)
 
 # --- Parsers ---
@@ -92,11 +89,11 @@ class DocumentService:
                         id=chunk_id, doc_id=doc_id, user_id=doc.user_id,
                         chunk_index=i, content=chunk.content,
                         page_number=chunk.page_number, section_heading=chunk.section_heading,
-                        token_count=chunk.token_count, qdrant_synced=True
+                        token_count=chunk.token_count, qdrant_synced=False
                     )
                     db.add(db_chunk)
-                    
-                    await qdrant_service.upsert_chunk(chunk_id, vector, {
+
+                    success = await qdrant_service.upsert_chunk(chunk_id, vector, {
                         "user_id": str(doc.user_id),
                         "doc_id": str(doc_id),
                         "doc_filename": doc.filename,
@@ -104,6 +101,8 @@ class DocumentService:
                         "page_number": chunk.page_number,
                         "section_heading": chunk.section_heading,
                     })
+                    if success:
+                        db_chunk.qdrant_synced = True
 
                 doc.status = "ready"
                 doc.chunk_count = len(chunks)

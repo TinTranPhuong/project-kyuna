@@ -112,7 +112,7 @@ export const PageViewer = () => {
   );
 
   return (
-    // FIX: Fully transparent background. Removed all blur.
+    // UI layout with a fully transparent background to maintain visibility of the original image
     <div className="flex flex-row h-full bg-transparent rounded-xl border border-white/10 overflow-hidden relative shadow-2xl">
       
       {/* --- SIDEBAR --- */}

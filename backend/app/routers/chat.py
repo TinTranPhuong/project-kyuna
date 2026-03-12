@@ -91,7 +91,7 @@ async def send_message(
     """
     from app.utils.prompt_loader import get_model_for_mode
     
-    if data.mode in ("fast", "thinking"):
+    if data.mode in ("fast", "thinking", "creative"):
         env_model = get_model_for_mode(data.mode)
         if env_model:
             data.model_used = env_model

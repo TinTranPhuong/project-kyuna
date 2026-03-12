@@ -56,7 +56,7 @@ export default function NotepadModal({ note }: NotepadModalProps) {
           style={{ touchAction: 'none' }}
           onPointerDown={(e) => dragControls.start(e)}
         >
-          {/* THE FIX: Clickable Input instead of static text */}
+          {/* Editable title input field for the note */}
           <div 
             className="flex items-center gap-2 text-white/50"
             onPointerDown={e => e.stopPropagation()} 

@@ -39,6 +39,7 @@ _ai_env_path = _PROMPTS_DIR.parent.parent.parent / "ai_server" / ".env"
 
 _fast_model: str | None = None
 _thinking_model: str | None = None
+_creative_model: str | None = None
 
 if _ai_env_path.exists():
     _ai_env_config = dotenv_values(_ai_env_path)
@@ -51,35 +52,30 @@ if _ai_env_path.exists():
     if _thinking_model:
         MODEL_PROMPT_MAP[_thinking_model] = "chats/thinking"
         
+    _creative_model = _ai_env_config.get("CHAT_MODEL_CREATIVE")
+    if _creative_model:
+        MODEL_PROMPT_MAP[_creative_model] = "chats/creative"
+        
     _translation_model = _ai_env_config.get("TRANSLATION_MODEL")
     if _translation_model:
         MODEL_PROMPT_MAP[_translation_model] = "translation"
 
 def get_model_for_mode(mode: str) -> str | None:
     """
-    Returns the model configured for the specified mode ('fast' or 'thinking').
+    Returns the model configured for the specified mode ('fast', 'thinking', or 'creative').
     """
     if mode == "fast":
         return _fast_model
     elif mode == "thinking":
         return _thinking_model
+    elif mode == "creative":
+        return _creative_model
     return None
 
 _cache: dict[str, str] = {}
 
 
 def load_prompt(key: str, *, reload: bool = False) -> str:
-    """
-    Load a prompt by key (subdirectory/name without .md).
-
-    Examples:
-        load_prompt("chats/fast")       → prompts/chats/fast.md
-        load_prompt("chats/thinking")   → prompts/chats/thinking.md
-        load_prompt("chats/autotitle")  → prompts/chats/autotitle.md
-        load_prompt("translation")      → prompts/translation.md
-
-    Raises FileNotFoundError if the .md file does not exist.
-    """
     if key in _cache and not reload:
         return _cache[key]
 

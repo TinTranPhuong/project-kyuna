@@ -6,12 +6,13 @@
 
 **A fully local, self-hosted personal workspace with AI. No cloud. No subscriptions. No data leaving your machine.**
 
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?style=flat-square&logo=fastapi)](https://fastapi.tiangolo.com)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.110-009688?style=flat-square&logo=fastapi)](https://fastapi.tiangolo.com)
 [![React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react)](https://react.dev)
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python)](https://python.org)
 [![llama.cpp](https://img.shields.io/badge/llama.cpp-GGUF-8B5CF6?style=flat-square)](https://github.com/ggerganov/llama.cpp)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License](https://img.shields.io/badge/License-MIT-22C55E?style=flat-square)](LICENSE)
+
 
 </div>
 
@@ -19,11 +20,12 @@
 
 ## What is Kyuna?
 
-Kyuna is a personal web workspace with AI Agentic that runs entirely on your own GPU. It combines a conversational AI with long-term memory, a chatbot, and a document library — all in a single self-hosted application with zero external API calls.
+Kyuna is a personal AI workspace that runs entirely on your own GPU. It combines a multi-mode conversational AI with long-term memory, an autonomous agentic pipeline, document RAG, and image translation — all self-hosted with zero external API calls.
 
 - **Chat** with a local LLM that remembers you across sessions via automatic fact extraction
+- **Agentic Mode** — an 11-step autonomous pipeline that plans, executes, reflects, evaluates, and self-corrects
+- **RAG** — upload documents and have the AI retrieve and reference them in every reply
 - **Translate** images to English using a 6-stage OCR + LLM pipeline
-- **Upload documents** and have the AI reference them in conversation
 - **Control your memory** — view, edit, promote, or delete every fact the AI has learned about you
 
 ---
@@ -54,116 +56,311 @@ Kyuna is a personal web workspace with AI Agentic that runs entirely on your own
 | Service     | Port | Role                                                               |
 |-------------|------|--------------------------------------------------------------------|
 | `frontend`  | 5173 | React UI (Vite)                                                    |
-| `backend`   | 8000 | FastAPI API, auth, RAG orchestration                               |
+| `backend`   | 8000 | FastAPI API, auth, RAG, orchestration, agentic pipeline             |
 | `ai_server` | 8001 | llama.cpp inference — chat, memory extraction, translation, vision |
-| `qdrant`    | 6333 | Vector similarity search                                           |
-| `postgres`  | 5432 | User data, chat history, memory facts                              |
+| `qdrant`    | 6333 | Vector similarity search (3 collections)                           |
+| `postgres`  | 5432 | User data, chat history, memory facts, documents                   |
 
-> The frontend never calls the AI server directly. All inference goes through the backend, which handles authentication, context injection, and database writes.
+> The frontend never calls the AI server directly. All inference goes through the backend, which handles auth, context injection, and database writes.
 
 ---
 
-## Features
+## Chat Modes
 
-### Chat with Long-Term Memory
+Kyuna supports four distinct chat modes, each with a dedicated system prompt and configured model:
 
-Every message goes through a RAG pipeline before reaching the model:
+| Mode | Model Slot | Character |
+|------|-----------|-----------|
+| **Fast** | `CHAT_MODEL_FAST` | Concise, direct. Optimized for quick Q&A. |
+| **Thinking** | `CHAT_MODEL_THINKING` | Deep reasoning. Uses extended chain-of-thought with `<think>` tags stripped from output. |
+| **Creative** | `CHAT_MODEL_THINKING` | Expansive, imaginative. Artistic and narrative-focused persona. |
+| **Agentic** | `CHAT_MODEL_ORCHESTRATOR` + `CHAT_MODEL_AGENT` | Autonomous multi-step pipeline (see below). |
+
+Each chat response is streamed via **Server-Sent Events (SSE)** back to the frontend. Every reply is preceded by a `memory_context` SSE event reporting how many memories, document chunks, and universal facts were injected.
+
+---
+
+## RAG — Retrieval Augmented Generation
+
+Every message goes through a full RAG pipeline before reaching the model:
 
 ```
 User message
      │
-     ├─ 1. Embed query ──────────────► nomic-embed-text (768d vectors)
+     ├─ 1. Embed query ──────────────► nomic-embed-text (768-dim vectors, "search_query:" prefix)
      │
-     ├─ 2. Parallel vector search:
-     │       • conversation_memories  — past extracted facts
-     │       • universal_facts        — permanent "always remember" entries  
-     │       • documents              — uploaded PDFs and files
+     ├─ 2. Parallel vector search (asyncio.gather):
+     │       • conversation_memories  (top_k=5, threshold=0.72) — extracted personal facts
+     │       • documents              (top_k=3, threshold=0.55) — uploaded file chunks
+     │       • universal_facts        (PostgreSQL direct)       — permanent "always remember" entries
      │
-     └─ 3. Assemble context (3,200 token budget) → inject into system prompt → stream response
+     ├─ 3. Context Assembly (3,200 token budget):
+     │       • Universal facts always included first (never trimmed)
+     │       • Memories fill remaining budget/2, sorted by cosine score
+     │       • Document chunks fill the rest, with filename+page citation
+     │
+     └─ 4. Inject into system prompt → stream response via SSE
 ```
 
-After every reply, a **background extraction worker** reads the last N messages, prompts the LLM to identify memorable facts about you, and saves them to PostgreSQL + Qdrant — without blocking the response.
+### Memory Extraction (Background Worker)
 
-### Memory Manager
+After every N turns (`EXTRACTION_EVERY_N_TURNS`, default 3), a background `asyncio.create_task` calls `run_extraction()`:
 
-Three layers of memory, all user-editable from the `/memory` page:
+1. Fetches the last 12 messages from PostgreSQL
+2. POSTs them to `POST /v1/memory/extract` on the AI server
+3. The AI server strips `<think>` tags, extracts a JSON array of facts (`subject`, `predicate`, `object`, `raw`, `confidence`)
+4. Each fact is embedded and checked for near-duplicates via Qdrant (threshold 0.88)
+5. New facts are committed to PostgreSQL and upserted to Qdrant with the same UUID, `qdrant_synced=True` only after confirmed write
 
-| Layer                     | Description                                          | Storage             |
-|---------------------------|------------------------------------------------------|---------------------|
-| **Conversation memories** | Facts extracted automatically after each chat        | PostgreSQL + Qdrant |
-| **Universal facts**       | Promoted facts — always injected, never filtered out | PostgreSQL + Qdrant |
-| **Document library**      | Uploaded PDFs and text files, chunked and embedded   | PostgreSQL + Qdrant |
+### Memory Layers
 
-### Agentic Mode (Autonomous Workflow Engine)
+| Layer | Description | Storage |
+|-------|-------------|---------|
+| **Conversation memories** | Facts auto-extracted after each conversation block | PostgreSQL + Qdrant (`conversation_memories`) |
+| **Universal facts** | User-promoted permanent facts — always injected, never filtered | PostgreSQL + Qdrant (`universal_facts`) |
+| **Document library** | Uploaded PDFs/DOCX/TXT, chunked at 400 tokens with 50-token overlap | PostgreSQL + Qdrant (`documents`) |
 
-Toggle **Agentic Mode** directly from the chat interface to transform Kyuna into an autonomous workflow engine. Rather than simply responding to a prompt, the system breaks your request down into an orchestrated, self-correcting 11-step pipeline distributed across your loaded models:
+---
 
-1. **Context Gathering** (Memory Agent) — Retrieves history and facts from the Qdrant vector database.
-2. **Pre-Reflection** (Reflector Agent) — Analyzes conversational context before planning.
-3. **Orchestrator** (Orchestrator Agent) — Formulates a pure JSON step-by-step Execution Plan.
-4. **User Approval** — The UI halts execution until the user manually modifies or approves the plan.
-5. **Delegated Task Execution** (Sub-Agents) — Specific steps are executed using specialized system prompts:
-   - `Coding`, `Content Writing`, `Translator`, `Web Search`, `Analysis`
-6. **Execution Post-Reflection** (Reflector Agent) — Evaluates the results of the sub-agent tools.
-7. **Synthesis** (Synthesizer Agent) — Combines tool results into a coherent initial draft.
-8. **Evaluation** (Evaluator Agent) — Scores the draft against the original prompt using strict JSON criteria.
-9. **Consensus Strategy** (Consensus Agent) — Optional dual-agent debate system to cross-verify facts.
-10. **Final Reflection Gate** (Reflector Agent) — A strict redo-loop. If the output fails the criteria, the pipeline loops back to Synthesis (Step 7) up to 3 times.
-11. **Final Output** — The verified markdown is streamed to the chat window and saved to PostgreSQL.
+## Agentic Mode — Autonomous Workflow Engine
 
-*Note: Agentic mode utilizes the **Hangoff Protocol** to seamlessly swap between your fast 14B model and your heavy 35B reasoning model mid-pipeline to maximize output quality without exceeding hardware VRAM bounds.*
+Toggle **Agentic Mode** from the chat interface to activate the full autonomous pipeline. Instead of a single model reply, your request is processed by **11 coordinated stages** distributed across specialized agents:
 
-### Image Translation Pipeline
+```
+User Request
+      │
+      ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Stage 1 │ Memory Agent       │ Parallel retrieval from all 3   │
+│          │                   │ Qdrant collections + AI format    │
+├──────────┼───────────────────┼────────────────────────────────  │
+│  Stage 2 │ Reflector (mid)   │ Reviews context before planning   │
+├──────────┼───────────────────┼────────────────────────────────  │
+│  Stage 3 │ Orchestrator      │ Produces JSON step-by-step plan   │
+│          │                   │ (model: CHAT_MODEL_ORCHESTRATOR)   │
+├──────────┼───────────────────┼────────────────────────────────  │
+│  Gate 1  │ User Approval     │ UI halts — user edits/approves    │
+├──────────┼───────────────────┼────────────────────────────────  │
+│  Stage 4 │ Executor          │ Sequential step runner with        │
+│          │                   │ WorkingMemory accumulation         │
+│          │  ├─ Sub-Agents ──►│ Analysis, Coding, Translator,     │
+│          │  │                │ Web Search, Content Writing        │
+│          │  └─ Tool calls ──►│ memory_search, doc_search,        │
+│          │                   │ web_search, web_fetch              │
+├──────────┼───────────────────┼────────────────────────────────  │
+│  Gate 2  │ HITL Dispatcher   │ Destructive tools (memory_write,  │
+│          │                   │ memory_delete) pause and wait for  │
+│          │                   │ explicit user confirm/cancel       │
+├──────────┼───────────────────┼────────────────────────────────  │
+│  Stage 5 │ Reflector (exec)  │ Reviews raw tool results for gaps │
+├──────────┼───────────────────┼────────────────────────────────  │
+│  Stage 6 │ Synthesizer       │ Drafts coherent final response    │
+│          │                   │ from all WorkingMemory results     │
+├──────────┼───────────────────┼────────────────────────────────  │
+│  Stage 7 │ Evaluator         │ JSON score: passed, failed_steps, │
+│          │                   │ feedback vs. original plan         │
+├──────────┼───────────────────┼────────────────────────────────  │
+│  Stage 8 │ Consensus         │ Two independent AI passes must    │
+│          │                   │ both agree the answer is valid     │
+├──────────┼───────────────────┼────────────────────────────────  │
+│  Stage 9 │ Reflector (final) │ JSON gate: {is_satisfactory,      │
+│          │                   │ feedback}. If false → redo loop    │
+│          │                   │ back to Synthesizer (max 3×)       │
+├──────────┼───────────────────┼────────────────────────────────  │
+│  Stage 10│ Final Output      │ Verified markdown streamed to chat │
+│          │                   │ and saved to PostgreSQL            │
+└─────────────────────────────────────────────────────────────────┘
+```
 
-A 6-stage pipeline for Image to Text translation:
+### Sub-Agents
+
+Each sub-agent runs on `CHAT_MODEL_AGENT` with a specialized system prompt and a restricted tool allowance:
+
+| Sub-Agent | Allowed Tools | Focus |
+|-----------|--------------|-------|
+| `analysis` | `memory_search`, `doc_search` | Data analysis and research |
+| `coding` | `web_search`, `web_fetch` | Code generation and debugging |
+| `translator` | — | Language translation |
+| `web_search` | `web_search`, `web_fetch` | Information retrieval from the web |
+| `content_writing` | `memory_search` | Long-form writing and editing |
+
+Sub-agents run an internal **tool-calling loop** (up to 3 iterations): if the model outputs a JSON `{tool_name, args}` block, the tool is dispatched and the result is fed back for the next iteration.
+
+### HITL — Human in the Loop (Gate 2)
+
+Destructive tools (`memory_write`, `memory_delete`, `memory_promote`, `doc_upload`, `doc_delete`) are flagged `requires_hitl: True` in the tool registry. When hit:
+
+1. The dispatcher emits a `confirmation_required` SSE event to the UI
+2. An `asyncio.Event` pauses the pipeline — no computation continues
+3. The user explicitly approves or cancels in the chat interface
+4. On approve: the tool executes normally. On cancel: returns `"cancelled"` and skips
+
+---
+
+## AI Server
+
+The AI server wraps `llama.cpp` GGUF models behind a FastAPI service. Architecture highlights:
+
+### Single-GPU Execution via Thread Isolation
+
+All CUDA operations run on a single-threaded `ThreadPoolExecutor(max_workers=1, thread_name_prefix="llama_cuda_worker")`. Only one model occupies the GPU at a time. Swapping models executes the **Hangoff Protocol**:
+
+```
+1. model.close()                   — release llama.cpp context
+2. del model                       — drop Python reference
+3. llama_backend_free()            — flush llama.cpp backend
+4. llama_backend_init()            — reinitialize backend
+5. cuCtxSynchronize()              — wait for all CUDA ops (nvcuda.dll)
+6. EmptyWorkingSet(GetCurrentProcess())  — release Windows VRAM ghost memory
+7. gc.collect() × 2               — Python garbage collection
+8. Load new model                  — now with full VRAM available
+```
+
+### Model Slots
+
+| Slot | `.env` key | Purpose |
+|------|-----------|---------|
+| Text (fast) | `CHAT_MODEL_FAST` | Fast chat, vision multimodal |
+| Text (thinking) | `CHAT_MODEL_THINKING` | Deep reasoning chat |
+| Text (agent) | `CHAT_MODEL_AGENT` | Sub-agent task execution |
+| Text (orchestrator) | `CHAT_MODEL_ORCHESTRATOR` | Agentic planning |
+| Translation | `TRANSLATION_MODEL` | OCR translation |
+| Vision | `CHAT_MODEL_FAST` + `MMPROJ_FILE_QWEN3` | Image understanding (Qwen3VL) |
+| Embedding | `EMBEDDING_MODEL` | nomic-embed-text (768d) |
+| Detector | `DETECTOR_MODEL` | PyTorch bubble detection |
+
+> Vision and text models use **separate slots** with separate locks. They cannot be simultaneously loaded — loading one unloads the other via the Hangoff Protocol.
+
+### Inference Parameters
+
+All inference parameters are resolved at request time with a 3-tier priority:
+
+```
+Request field → .env setting → Hard fallback
+```
+
+Key parameters: `n_ctx` (default 32768), `n_gpu_layers` (-1 = all), `flash_attn`, `type_k/type_v` (Q8 KV cache), `top_k`, `min_p`, `repeat_penalty`.
+
+### Key Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /v1/chat/completions` | OpenAI-compatible streaming SSE + non-streaming fallback |
+| `POST /v1/memory/extract` | Extract structured facts from conversation (JSON array) |
+| `POST /v1/embeddings` | Text embeddings with `search_query:` / `search_document:` prefix |
+| `POST /v1/models/{name}/load` | Load a GGUF model (triggers Hangoff if swapping) |
+| `POST /v1/models/{name}/unload` | Unload and free VRAM |
+| `POST /v1/translate/ocr-pipeline` | YOLOv8 bubble detect + OCR on image |
+| `POST /v1/translate/batch` | LLM batch translation of OCR'd regions |
+| `POST /v1/translate/image/stream` | Vision LLM streaming translation |
+| `GET /v1/health` | Model status, current model name, VRAM usage (MB) |
+
+The chat endpoint also prints a **terminal Performance Report** after each generation: TTFT, tokens/sec, ms/token, VRAM usage, and GPU layer split status.
+
+---
+
+## Image Translation Pipeline
+
+A 6-stage pipeline for image translation:
 
 ```
 Image upload
      │
      Stage 1 ── Text bubble detection     (PyTorch YOLOv8)
      Stage 2 ── Bubble cropping           (OpenCV)
-     Stage 3 ── OCR                       (OCR / vision LLM)
+     Stage 3 ── OCR                       (EasyOCR / vision LLM)
      Stage 4 ── Hangoff Protocol          (unload OCR → flush VRAM → load LLM)
-     Stage 5 ── Translation               (LLM)
+     Stage 5 ── Translation               (TRANSLATION_MODEL)
      Stage 6 ── Canvas overlay rendering  (React)
      │
      Result: original image with translated text overlaid in-browser
 ```
 
-**Hangoff Protocol** — switching between PyTorch OCR models and a large GGUF translation model on a single 16 GB GPU requires explicitly unloading models, flushing the CUDA cache, and calling `SetProcessWorkingSetSize` (Windows) to release VRAM ghost memory before loading the next model.
+---
+
+## Frontend
+
+Built with **React 18 + Vite + TypeScript + Tailwind CSS**. All AI responses are consumed as Server-Sent Events (SSE) and progressively rendered in the UI.
+
+### Pages
+
+| Page | Route | Description |
+|------|-------|-------------|
+| **Home** | `/` | Dashboard with widgets (clock, timer, music player, notes) |
+| **Chat** | `/chat` | Main chat interface — mode selector, SSE token streaming, memory context badge |
+| **Memory** | `/memory` | View, edit, promote, and delete extracted facts and universal entries |
+| **Documents** | `/docs` | Upload and manage documents for RAG |
+| **Translator** | `/translator` | Image upload → OCR → translation canvas |
+| **Notes** | `/notes` | Quick markdown notes |
+| **Tools** | `/tools` | Utility tools (calculator, timer, etc.) |
+| **Dashboard** | `/dashboard` | Usage stats and session overview |
+
+### State Management (Zustand)
+
+| Store | Manages |
+|-------|---------|
+| `authStore` | JWT tokens, current user, login/logout |
+| `chatStore` | Conversations, messages, SSE streaming state, agentic run lifecycle |
+| `memoryStore` | Memory facts, universal facts, pagination |
+| `settingsStore` | User preferences, model selection, wallpaper |
+| `translatorStore` | Translation jobs, OCR results, overlay canvas state |
+| `timerStore` | Pomodoro sessions, timer state |
+| `noteStore` | Notes CRUD |
+
+### SSE Streaming Pattern
+
+The chat interface consumes two separate SSE streams:
+
+- **Regular chat**: `POST /api/v1/chat/{id}/stream` → events: `memory_context`, `token`, `[DONE]`
+- **Agentic mode**: `POST /api/v1/agent/runs` → events: `agent_start`, `agent_end`, `plan_ready`, `confirmation_required`, `tool_start`, `tool_result`, `token`, `done`
+
+The UI renders `agent_start`/`agent_end` events as a live **Execution Progress** panel that shows which agent is currently running, and clears itself when the pipeline completes.
 
 ---
 
-## AI Server
+## Backend
 
-The AI server wraps `llama.cpp` GGUF models behind a FastAPI service. It uses a **single-threaded GPU executor** (`ThreadPoolExecutor(max_workers=1)`) — only one model can occupy the GPU at a time, and loading a new model automatically unloads the previous one.
+The FastAPI backend handles all orchestration, auth, and database writes. The AI server is never called directly from the frontend.
 
-### Model Slots
+### API Routes
 
-| Slot                           | Purpose                                        |
-|--------------------------------|------------------------------------------------|
-| `CHAT_MODEL_FAST`              | Fast vision/chat model                         |
-| `CHAT_MODEL_THINKING`          | Heavy reasoning chat model                     |
-| `CHAT_MODEL_AGENT`             | Execution sub-agent model (Tool calling)       |
-| `CHAT_MODEL_ORCHESTRATOR`      | Agentic planning model                         |
-| `TRANSLATION_MODEL`            | Specialized translation LLM                    |
-| `VISION_MODEL` + `MMPROJ_FILE` | Multimodal understanding                       |
-| `DETECTOR_MODEL`               | Comic text bubble detection (PyTorch)          |
-| `EMBEDDING_MODEL`              | Sentence embeddings for RAG (nomic-embed-text) |
+| Prefix | Router | Key Endpoints |
+|--------|--------|---------------|
+| `/api/v1/auth` | `auth.py` | Register, login (JWT), refresh token |
+| `/api/v1/users` | `users.py` | Profile, password change, settings, account delete |
+| `/api/v1/chat` | `chat.py` | CRUD conversations, `POST /{id}/stream` (RAG + SSE) |
+| `/api/v1/agent` | `agent.py` | `POST /runs`, `POST /runs/{id}/plan/approve`, tool confirm/cancel |
+| `/api/v1/memory` | `memory.py` | List/edit/delete facts, promote to universal, memory search |
+| `/api/v1/docs` | `documents.py` | Upload, list, delete documents; background chunk + embed |
+| `/api/v1/translate` | `translator.py` | Full 6-stage translation pipeline |
+| `/api/v1/notes` | `note.py` | Notes CRUD |
+| `/api/v1/sessions` | `sessions.py` | Pomodoro session tracking |
+| `/api/v1/dashboard` | `dashboard.py` | Usage statistics |
 
-### Key Endpoints
+### Database Models (PostgreSQL + SQLAlchemy async)
 
-| Endpoint                          | Description                                        |
-|-----------------------------------|----------------------------------------------------|
-| `POST /v1/chat/completions`       | Streaming chat — OpenAI-compatible SSE             |
-| `POST /v1/memory/extract`         | Extract structured facts from a conversation       |
-| `POST /v1/embeddings`             | Text embeddings for RAG                            |
-| `POST /v1/models/{name}/load`     | Load a GGUF model by filename                      |
-| `POST /v1/models/{name}/unload`   | Unload a model and free VRAM                       |
-| `POST /v1/translate/ocr-pipeline` | Detect + OCR an image page                         |
-| `POST /v1/translate/batch`        | Translate OCR'd regions                            |
-| `POST /v1/translate/image/stream` | Vision LLM streaming translation                   |
-| `GET /v1/health`                  | Model status + VRAM usage                          |
+| Model | Table | Description |
+|-------|-------|-------------|
+| `User` | `users` | Auth, profile |
+| `UserSettings` | `user_settings` | Preferences, wallpaper, music groups |
+| `ChatConversation` | `chat_conversations` | Title, system prompt, message count |
+| `ChatMessage` | `chat_messages` | Role, content, tokens used, generation_ms |
+| `MemoryFact` | `memory_facts` | Subject/predicate/object triples, confidence, qdrant_synced |
+| `UniversalFact` | `universal_facts` | Always-on facts, promoted from memory |
+| `Document` | `documents` | Upload metadata, status, chunk count |
+| `DocChunk` | `doc_chunks` | 400-token chunks with page + heading metadata |
+| `ExtractionJob` | `extraction_jobs` | Background extraction status tracking |
+| `AgentPlan` | `agent_plans` | JSON step plan, approval status |
+| `AgentRun` | `agent_runs` | Run lifecycle, linked to plan |
+
+### Middleware & Infrastructure
+
+- **Auth**: JWT Bearer tokens (access + refresh), `passlib[bcrypt]` password hashing
+- **Rate limiting**: `slowapi` on sensitive endpoints
+- **CORS**: configurable `ALLOWED_ORIGINS` (default `http://localhost:5173`)
+- **Connection pool**: `pool_size=5`, `max_overflow=15`, `pool_recycle=1800s`
+- **Startup**: `create_all` (idempotent table creation) + Qdrant collection init via `lifespan()`
+- **Migrations**: Alembic for schema changes
 
 ---
 
@@ -173,9 +370,9 @@ The AI server wraps `llama.cpp` GGUF models behind a FastAPI service. It uses a 
 
 - Python 3.11
 - Node.js 22+
-- CUDA-compatible GPU (16GB VRAM or more recommended)
+- CUDA-compatible GPU (16 GB VRAM or more recommended)
 - PostgreSQL 16+
-- Qdrant (native Windows binary)
+- Qdrant (native Windows binary, included in `qdrant/`)
 
 ### Installation
 
@@ -194,20 +391,15 @@ cp .env.example .env        # Edit DATABASE_URL, SECRET_KEY, AI_SERVER_URL
 cd ../ai_server
 python -m venv venv && venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env        # Edit MODELS_DIR, model filenames, MAX_TOKENS
+cp .env.example .env        # Edit MODELS_DIR, model filenames
 
 # 4. Frontend
 cd ../frontend
 npm install
-cp .env.example .env        # Edit VITE_API_URL
+cp .env.example .env        # Set VITE_API_URL=http://localhost:8000
 
-# 5. Start everything (Windows — run as Administrator)
+# 5. Start everything (Windows)
 start_kyuna.bat
-```
-
-```bat
-rem Stop all services
-stop_kyuna.bat
 ```
 
 ### AI Server `.env` Reference
@@ -216,19 +408,26 @@ stop_kyuna.bat
 MODELS_DIR=D:\models
 
 # Model filenames — must exist in MODELS_DIR
-CHAT_MODEL_FAST=llm_fast.gguf
-CHAT_MODEL_THINKING=llm_thinking.gguf
-CHAT_MODEL_AGENT=llm_subagent.gguf
-CHAT_MODEL_ORCHESTRATOR=llm_planner.gguf
-TRANSLATE_MODEL=llm_translate.gguf
-VISION_MODEL=llm_fast.gguf
-MMPROJ_FILE=mmproj-llm_fast.gguf
+CHAT_MODEL_FAST
+CHAT_MODEL_THINKING
+CHAT_MODEL_AGENT
+CHAT_MODEL_ORCHESTRATOR
+TRANSLATION_MODEL
+MMPROJ_FILE_
 EMBEDDING_MODEL=nomic-embed-text-v1.5.Q8_0.gguf
 
 # Inference
 N_GPU_LAYERS=-1       # -1 = all layers on GPU
+N_CTX=32768
 MAX_TOKENS=32768
-CONTEXT_SIZE=32768
+FLASH_ATTN=true
+KV_TYPE_K=2           # Q8 KV cache
+KV_TYPE_V=2
+TEMPERATURE=0.7
+TOP_P=0.9
+TOP_K=40
+MIN_P=0.05
+REPEAT_PENALTY=1.1
 ```
 
 ---
@@ -239,79 +438,70 @@ CONTEXT_SIZE=32768
 project-kyuna/
 │
 ├── frontend/                           # React + Vite + TypeScript
-│   ├── src/
-│   │   ├── components/                 # Reusable UI components
-│   │   ├── hooks/                      # Custom React hooks
-│   │   ├── layouts/                    # Page layouts
-│   │   ├── lib/                        # Utility functions
-│   │   ├── pages/                      # Application pages
-│   │   ├── services/                   # Axios API clients
-│   │   ├── store/                      # Zustand state management
-│   │   ├── styles/                     # Global CSS/Tailwind
-│   │   ├── types/                      # TypeScript interfaces
-│   │   ├── App.tsx
-│   │   ├── index.css
-│   │   ├── main.tsx
-│   │   └── vite-env.d.ts
-│   ├── .env
-│   ├── .eslintrc.cjs
-│   ├── .prettierrc
-│   ├── index.html
-│   ├── package.json
-│   ├── playwright.config.ts
-│   ├── postcss.config.js
-│   ├── tailwind.config.ts
-│   ├── tsconfig.json
-│   └── vite.config.ts
+│   └── src/
+│       ├── components/                 # Reusable UI components
+│       ├── hooks/                      # Custom React hooks
+│       ├── pages/                      # Application pages
+│       ├── services/                   # Axios API clients
+│       ├── store/                      # Zustand state management
+│       └── types/                      # TypeScript interfaces
 │
 ├── backend/                            # FastAPI REST API
-│   ├── app/
-│   │   ├── core/                       # App configuration and settings
-│   │   ├── dependencies/               # FastAPI dependencies
-│   │   ├── models/                     # SQLAlchemy ORM models
-│   │   ├── routers/                    # API endpoints
-│   │   ├── schemas/                    # Pydantic validation schemas
-│   │   ├── services/                   # Business logic
-│   │   ├── utils/                      # Helper functions
-│   │   ├── workers/                    # Background tasks
-│   │   └── main.py                     # FastAPI entry point
-│   ├── migrations/                     # Alembic database migrations
-│   ├── scripts/                        # Utility scripts
-│   ├── uploads/                        # User uploaded files
-│   ├── alembic.ini
-│   ├── MIGRATIONS.md
-│   ├── pyproject.toml
-│   └── requirements.txt
+│   └── app/
+│       ├── core/                       # Config, DB, security
+│       ├── models/                     # SQLAlchemy ORM models
+│       ├── routers/                    # API endpoints
+│       ├── schemas/                    # Pydantic schemas
+│       ├── services/
+│       │   ├── agents/                 # Agentic pipeline
+│       │   │   ├── sub_agents/         # Analysis, Coding, Translator, WebSearch, ContentWriting
+│       │   │   ├── orchestrator.py     # JSON plan generation
+│       │   │   ├── executor.py         # Sequential step runner
+│       │   │   ├── dispatcher.py       # Tool dispatch + HITL Gate 2
+│       │   │   ├── reflector.py        # 3-phase reflection (mid/exec/final)
+│       │   │   ├── synthesizer.py      # Final answer synthesis
+│       │   │   ├── evaluator.py        # JSON scoring vs. plan
+│       │   │   ├── consensus.py        # Dual-pass fact/answer verification
+│       │   │   ├── memory_agent.py     # Parallel 3-layer memory retrieval
+│       │   │   └── tool_registry.py    # Tool definitions + HITL flags
+│       │   ├── chat_service.py         # RAG pipeline + SSE streaming
+│       │   ├── context_assembler.py    # Token-budget context builder
+│       │   ├── embedding_service.py    # nomic-embed-text wrapper
+│       │   ├── memory_service.py       # Memory CRUD + promote
+│       │   ├── qdrant_service.py       # Vector DB operations
+│       │   └── document_service.py     # Chunking, embedding, indexing
+│       └── workers/
+│           └── extraction_worker.py    # Background fact extraction
 │
 ├── ai_server/                          # llama.cpp inference server
-│   ├── app/
-│   │   ├── core/                       # Server configuration
-│   │   ├── models/                     # Data models
-│   │   ├── prompts/                    # System prompts and templates
-│   │   ├── routers/                    # Inference API endpoints
-│   │   ├── services/                   # Model loading, PyTorch pipelines
-│   │   ├── utils/                      # AI utilities
-│   │   └── main.py                     # FastAPI entry point
-│   ├── comic-text-detector/            # PyTorch text bubble detection model
-│   ├── .env.example
-│   └── requirements.txt
+│   └── app/
+│       ├── services/
+│       │   └── model_manager.py        # Single-GPU CUDA executor + Hangoff Protocol
+│       ├── routers/
+│       │   ├── chat.py                 # OpenAI-compatible SSE endpoint
+│       │   ├── memory.py               # Fact extraction endpoint
+│       │   ├── embeddings.py           # Embedding endpoint
+│       │   ├── models.py               # Model load/unload/list
+│       │   └── translate.py            # OCR + translation pipeline
+│       └── prompts/
+│           ├── chats/                  # fast.md, thinking.md, creative.md
+│           └── agents/                 # orchestrator.md, reflector.md,
+│                                       # synthesizer.md, evaluator.md,
+│                                       # consensus.md, memory_agent.md
 │
-├── qdrant/                             # Qdrant vector DB data directory
-├── start_kyuna.bat                     # Start all services
-├── stop_kyuna.bat                      # Stop all services
-└── dev_kyuna.bat                       # Test launcher for all services
+└── qdrant/                             # Qdrant vector DB (native binary + data)
 ```
 
 ---
 
 ## Tech Stack
 
-| Layer              | Technologies                                                                |
+| Layer | Technologies |
 |--------------------|-----------------------------------------------------------------------------|
-| **Frontend**       | React 18 · Vite · TypeScript · Tailwind CSS · Zustand · Framer Motion       |
-| **Backend**        | FastAPI · SQLAlchemy (async) · PostgreSQL · asyncpg · Qdrant client · httpx |
-| **AI Server**      | llama.cpp · CUDA · PyTorch · OpenCV                              |
-| **Infrastructure** | NSSM (Windows services) · Qdrant native binary · PostgreSQL                 |
+| **Frontend** | React 18 · Vite · TypeScript · Tailwind CSS · Zustand · Framer Motion · SSE |
+| **Backend** | FastAPI · SQLAlchemy (async) · PostgreSQL · asyncpg · Qdrant client · httpx |
+| **AI Server** | llama.cpp · CUDA · PyTorch · OpenCV · EasyOCR · nomic-embed-text |
+| **Infrastructure** | Qdrant native binary · PostgreSQL · Windows NSSM |
 
 ---
 

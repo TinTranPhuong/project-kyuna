@@ -12,12 +12,14 @@ class AISettings(BaseSettings):
     CHAT_MODEL_FAST: str = ""
     CHAT_MODEL_THINKING: str = ""
     CHAT_MODEL_AGENT: str = ""
+    CHAT_MODEL_CREATIVE: str = ""
     TRANSLATION_MODEL: str = ""
     DETECTOR_MODEL: str = ""
     VISION_MODEL: str = ""
     MMPROJ_FILE: str = ""
     MMPROJ_FILE_QWEN3: str = ""
     MMPROJ_FILE_QWEN35: str = ""
+    MMPROJ_FILE_CREATIVE: str = ""
     MODELS_DIR: str = "./models"
     MIN_CONFIDENCE: float = 0
     N_GPU_LAYERS: int = -1
@@ -52,3 +54,5 @@ print(f"[Config] Loading .env from: {_ENV_FILE}")
 print(f"[Config] MAX_TOKENS={settings.MAX_TOKENS}  N_CTX={settings.N_CTX}")
 print(f"[Config] FAST_MODEL={settings.CHAT_MODEL_FAST}")
 print(f"[Config] THINK_MODEL={settings.CHAT_MODEL_THINKING}")
+print(f"[Config] CREATIVE_MODEL={settings.CHAT_MODEL_CREATIVE}")
+print(f"[Config] CREATIVE_MMPROJ_FILE={settings.MMPROJ_FILE_CREATIVE}")

@@ -81,7 +81,7 @@ async def load_model(model_name: str):
     return {"status": "loaded", "model": model_name}
 
 
-# FIX: Added missing unload endpoint
+# Endpoint to explicitly unload a model from memory
 @router.post("/models/{model_name}/unload")
 async def unload_model(model_name: str):
     """

@@ -8,7 +8,7 @@ class ChatMessageRequest(BaseModel):
     content: str  
     model_used: Optional[str] = None  
     image_base64: Optional[str] = None
-    mode: Literal["fast", "thinking", "agentic"] = "fast"
+    mode: Literal["fast", "thinking", "agentic", "creative"] = "fast"
     
     model_config = ConfigDict(protected_namespaces=())
     

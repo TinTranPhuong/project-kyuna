@@ -44,7 +44,7 @@ async def hangoff_protocol() -> None:
         torch.cuda.synchronize()   
     gc.collect()
     
-    # ── Windows VRAM Ghost Memory Fix ────────────────────────────────────────
+    # ── OS-Level Memory Management ───────────────────────────────────────────
     _windows_force_vram_release()
     
     translation_model = getattr(settings, "TRANSLATION_MODEL", None)

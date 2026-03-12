@@ -5,7 +5,7 @@ from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import (
     Distance, VectorParams, PointStruct,
     Filter, FieldCondition, MatchValue,
-    PointIdsList,
+    PointIdsList, FilterSelector,
 )
 
 from app.core.config import settings
@@ -48,6 +48,7 @@ class QdrantService:
     # ── Upsert helpers ────────────────────────────────────────────────────────
 
     async def upsert_memory(self, fact_id: UUID, vector: list[float], payload: dict) -> bool:
+        """Inserts or updates a conversation memory point in the database."""
         try:
             await self.client.upsert(
                 collection_name="conversation_memories",
@@ -59,6 +60,7 @@ class QdrantService:
             return False
 
     async def upsert_chunk(self, chunk_id: UUID, vector: list[float], payload: dict) -> bool:
+        """Inserts or updates a document chunk point in the database."""
         try:
             await self.client.upsert(
                 collection_name="documents",
@@ -70,6 +72,7 @@ class QdrantService:
             return False
 
     async def upsert_universal(self, fact_id: UUID, vector: list[float], payload: dict) -> bool:
+        """Inserts or updates a universal fact point across all users."""
         try:
             await self.client.upsert(
                 collection_name="universal_facts",
@@ -81,8 +84,7 @@ class QdrantService:
             return False
 
     # ── Search helpers ────────────────────────────────────────────────────────
-    # FIX: qdrant-client >= 1.7 removed .search() — replaced by .query_points()
-    # .query_points() returns a QueryResponse with a .points attribute (list[ScoredPoint])
+    # These methods utilize the `.query_points()` API for vector search operations.
 
     async def _query(
         self,
@@ -115,12 +117,15 @@ class QdrantService:
             return []
 
     async def search_memories(self, user_id: UUID, vector: list[float], top_k: int = 5, threshold: float = 0.72) -> list[dict]:
+        """Searches for related conversation memories specific to a user."""
         return await self._query("conversation_memories", vector, self._user_filter(user_id), top_k, threshold)
 
     async def search_documents(self, user_id: UUID, vector: list[float], top_k: int = 3, threshold: float = 0.55) -> list[dict]:
+        """Searches for related document chunks specific to a user."""
         return await self._query("documents", vector, self._user_filter(user_id), top_k, threshold)
 
     async def search_universal(self, user_id: UUID, vector: list[float], top_k: int = 10) -> list[dict]:
+        """Searches for related universal facts, which apply to all users but can be filtered."""
         return await self._query("universal_facts", vector, self._user_filter(user_id), top_k)
 
     async def search_all(self, user_id: UUID, vector: list[float]) -> dict:
@@ -136,6 +141,7 @@ class QdrantService:
     # ── Delete helpers ────────────────────────────────────────────────────────
 
     async def delete_point(self, collection: str, point_id: UUID) -> bool:
+        """Deletes a specific vector point by its ID."""
         try:
             await self.client.delete(
                 collection_name=collection,
@@ -147,10 +153,13 @@ class QdrantService:
             return False
 
     async def delete_by_user(self, collection: str, user_id: UUID) -> bool:
+        """Deletes all vector points associated with a specific user from a collection."""
         try:
             await self.client.delete(
                 collection_name=collection,
-                points_selector=Filter(must=[FieldCondition(key="user_id", match=MatchValue(value=str(user_id)))])
+                points_selector=FilterSelector(
+                    filter=Filter(must=[FieldCondition(key="user_id", match=MatchValue(value=str(user_id)))])
+                )
             )
             return True
         except Exception as e:
@@ -162,7 +171,9 @@ class QdrantService:
         try:
             await self.client.delete(
                 collection_name="documents",
-                points_selector=Filter(must=[FieldCondition(key="doc_id", match=MatchValue(value=str(doc_id)))])
+                points_selector=FilterSelector(
+                    filter=Filter(must=[FieldCondition(key="doc_id", match=MatchValue(value=str(doc_id)))])
+                )
             )
             return True
         except Exception as e:

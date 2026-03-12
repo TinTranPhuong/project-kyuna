@@ -409,7 +409,7 @@ async def _run_pipeline(db: AsyncSession, job_id: UUID) -> None:
                 with open(img_path, "rb") as f:
                     img_b64 = base64.b64encode(f.read()).decode("utf-8")
                 
-                # CRITICAL ARCHITECTURE FIX: One unified call for Stages 1, 2, and 3
+                # Execute Stages 1, 2, and 3 of the OCR pipeline in a single, unified step for better efficiency
                 regions = await ai_client.ocr_pipeline(img_b64)
                 
                 if not regions:

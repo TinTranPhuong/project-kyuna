@@ -113,8 +113,6 @@ async def run_extraction(conversation_id: UUID, user_id: UUID) -> None:
             new_job.error = str(e)
             new_job.completed_at = datetime.now(timezone.utc)
             await db.commit()
-            await db.commit()
-
 
 async def dedup_and_save(facts: list[dict], user_id: UUID, conversation_id: UUID, db) -> int:
     from app.services.embedding_service import embedding_service
