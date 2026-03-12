@@ -73,7 +73,7 @@ Kyuna supports four distinct chat modes, each with a dedicated system prompt and
 |------|-----------|-----------|
 | **Fast** | `CHAT_MODEL_FAST` | Concise, direct. Optimized for quick Q&A. |
 | **Thinking** | `CHAT_MODEL_THINKING` | Deep reasoning. Uses extended chain-of-thought with `<think>` tags stripped from output. |
-| **Creative** | `CHAT_MODEL_THINKING` | Expansive, imaginative. Artistic and narrative-focused persona. |
+| **Creative** | `CHAT_MODEL_CREATIVE` | Expansive, imaginative. Artistic and narrative-focused persona. |
 | **Agentic** | `CHAT_MODEL_ORCHESTRATOR` + `CHAT_MODEL_AGENT` | Autonomous multi-step pipeline (see below). |
 
 Each chat response is streamed via **Server-Sent Events (SSE)** back to the frontend. Every reply is preceded by a `memory_context` SSE event reporting how many memories, document chunks, and universal facts were injected.
@@ -127,49 +127,51 @@ After every N turns (`EXTRACTION_EVERY_N_TURNS`, default 3), a background `async
 Toggle **Agentic Mode** from the chat interface to activate the full autonomous pipeline. Instead of a single model reply, your request is processed by **11 coordinated stages** distributed across specialized agents:
 
 ```
-User Request
-      │
-      ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  Stage 1 │ Memory Agent       │ Parallel retrieval from all 3   │
-│          │                   │ Qdrant collections + AI format    │
-├──────────┼───────────────────┼────────────────────────────────  │
-│  Stage 2 │ Reflector (mid)   │ Reviews context before planning   │
-├──────────┼───────────────────┼────────────────────────────────  │
-│  Stage 3 │ Orchestrator      │ Produces JSON step-by-step plan   │
-│          │                   │ (model: CHAT_MODEL_ORCHESTRATOR)   │
-├──────────┼───────────────────┼────────────────────────────────  │
-│  Gate 1  │ User Approval     │ UI halts — user edits/approves    │
-├──────────┼───────────────────┼────────────────────────────────  │
-│  Stage 4 │ Executor          │ Sequential step runner with        │
-│          │                   │ WorkingMemory accumulation         │
-│          │  ├─ Sub-Agents ──►│ Analysis, Coding, Translator,     │
-│          │  │                │ Web Search, Content Writing        │
-│          │  └─ Tool calls ──►│ memory_search, doc_search,        │
-│          │                   │ web_search, web_fetch              │
-├──────────┼───────────────────┼────────────────────────────────  │
-│  Gate 2  │ HITL Dispatcher   │ Destructive tools (memory_write,  │
-│          │                   │ memory_delete) pause and wait for  │
-│          │                   │ explicit user confirm/cancel       │
-├──────────┼───────────────────┼────────────────────────────────  │
-│  Stage 5 │ Reflector (exec)  │ Reviews raw tool results for gaps │
-├──────────┼───────────────────┼────────────────────────────────  │
-│  Stage 6 │ Synthesizer       │ Drafts coherent final response    │
-│          │                   │ from all WorkingMemory results     │
-├──────────┼───────────────────┼────────────────────────────────  │
-│  Stage 7 │ Evaluator         │ JSON score: passed, failed_steps, │
-│          │                   │ feedback vs. original plan         │
-├──────────┼───────────────────┼────────────────────────────────  │
-│  Stage 8 │ Consensus         │ Two independent AI passes must    │
-│          │                   │ both agree the answer is valid     │
-├──────────┼───────────────────┼────────────────────────────────  │
-│  Stage 9 │ Reflector (final) │ JSON gate: {is_satisfactory,      │
-│          │                   │ feedback}. If false → redo loop    │
-│          │                   │ back to Synthesizer (max 3×)       │
-├──────────┼───────────────────┼────────────────────────────────  │
-│  Stage 10│ Final Output      │ Verified markdown streamed to chat │
-│          │                   │ and saved to PostgreSQL            │
-└─────────────────────────────────────────────────────────────────┘
+
+          User Request
+               │
+               ▼
+          ┌───────────────────────────────────────────────────────────────────┐
+          │  Stage 1  │ Memory Agent       │ Parallel retrieval from all 3    │
+          │           │                    │ Qdrant collections + AI format   │
+          ├───────────┼────────────────────┼──────────────────────────────────│
+          │  Stage 2  │ Reflector (mid)    │ Reviews context before planning  │
+          ├───────────┼────────────────────┼──────────────────────────────────│
+          │  Stage 3  │ Orchestrator       │ Produces JSON step-by-step plan  │
+          │           │                    │ (model: CHAT_MODEL_ORCHESTRATOR) │
+          ├───────────┼────────────────────┼──────────────────────────────────│
+          │  Gate 1   │ User Approval      │ UI halts — user edits/approves   │
+          ├───────────┼────────────────────┼──────────────────────────────────│
+          │  Stage 4  │ Executor           │ Sequential step runner with      │
+          │           │                    │ WorkingMemory accumulation       │
+          │           │  ├─ Sub-Agents ──► │ Analysis, Coding, Translator,    │
+          │           │  │                 │ Web Search, Content Writing      │
+          │           │  └─ Tool calls ──► │ memory_search, doc_search,       │
+          │           │                    │ web_search, web_fetch            │
+          ├───────────┼────────────────────┼──────────────────────────────────│
+          │  Gate 2   │ HITL Dispatcher    │ Destructive tools (memory_write, │
+          │           │                    │ memory_delete) pause and wait for│
+          │           │                    │ explicit user confirm/cancel     │
+          ├───────────┼────────────────────┼──────────────────────────────────│
+          │  Stage 5  │ Reflector (exec)   │ Reviews raw tool results for gaps│
+          ├───────────┼────────────────────┼──────────────────────────────────│
+          │  Stage 6  │ Synthesizer        │ Drafts coherent final response   │
+          │           │                    │ from all WorkingMemory results   │
+          ├───────────┼────────────────────┼──────────────────────────────────│
+          │  Stage 7  │ Evaluator          │ JSON score: passed, failed_steps,│
+          │           │                    │ feedback vs. original plan       │
+          ├───────────┼────────────────────┼──────────────────────────────────│
+          │  Stage 8  │ Consensus          │ Two independent AI passes must   │
+          │           │                    │ both agree the answer is valid   │
+          ├───────────┼────────────────────┼──────────────────────────────────│
+          │  Stage 9  │ Reflector (final)  │ JSON gate: {is_satisfactory,     │
+          │           │                    │ feedback}. If false → redo loop  │
+          │           │                    │ back to Synthesizer (max 3×)     │
+          ├───────────┼────────────────────┼──────────────────────────────────│
+          │  Stage 10 │ Final Output       │ Verified markdown streamed       │
+          │           │                    │ and saved to PostgreSQL          │
+          └───────────────────────────────────────────────────────────────────┘
+
 ```
 
 ### Sub-Agents
@@ -180,7 +182,7 @@ Each sub-agent runs on `CHAT_MODEL_AGENT` with a specialized system prompt and a
 |-----------|--------------|-------|
 | `analysis` | `memory_search`, `doc_search` | Data analysis and research |
 | `coding` | `web_search`, `web_fetch` | Code generation and debugging |
-| `translator` | — | Language translation |
+| `translator` | `doc_search`, `memory_search` | Language translation |
 | `web_search` | `web_search`, `web_fetch` | Information retrieval from the web |
 | `content_writing` | `memory_search` | Long-form writing and editing |
 
@@ -206,14 +208,14 @@ The AI server wraps `llama.cpp` GGUF models behind a FastAPI service. Architectu
 All CUDA operations run on a single-threaded `ThreadPoolExecutor(max_workers=1, thread_name_prefix="llama_cuda_worker")`. Only one model occupies the GPU at a time. Swapping models executes the **Hangoff Protocol**:
 
 ```
-1. model.close()                   — release llama.cpp context
-2. del model                       — drop Python reference
-3. llama_backend_free()            — flush llama.cpp backend
-4. llama_backend_init()            — reinitialize backend
-5. cuCtxSynchronize()              — wait for all CUDA ops (nvcuda.dll)
+1. model.close()                         — release llama.cpp context
+2. del model                             — drop Python reference
+3. llama_backend_free()                  — flush llama.cpp backend
+4. llama_backend_init()                  — reinitialize backend
+5. cuCtxSynchronize()                    — wait for all CUDA ops (nvcuda.dll)
 6. EmptyWorkingSet(GetCurrentProcess())  — release Windows VRAM ghost memory
-7. gc.collect() × 2               — Python garbage collection
-8. Load new model                  — now with full VRAM available
+7. gc.collect() × 2                      — Python garbage collection
+8. Load new model                        — now with full VRAM available
 ```
 
 ### Model Slots
@@ -222,10 +224,11 @@ All CUDA operations run on a single-threaded `ThreadPoolExecutor(max_workers=1, 
 |------|-----------|---------|
 | Text (fast) | `CHAT_MODEL_FAST` | Fast chat, vision multimodal |
 | Text (thinking) | `CHAT_MODEL_THINKING` | Deep reasoning chat |
-| Text (agent) | `CHAT_MODEL_AGENT` | Sub-agent task execution |
-| Text (orchestrator) | `CHAT_MODEL_ORCHESTRATOR` | Agentic planning |
+| Text (creative) | `CHAT_MODEL_CREATIVE` | Creative writing chat |
+| Text (agent) | `CHAT_MODEL_AGENT` | Agents task execution |
+| Text (orchestrator) | `CHAT_MODEL_ORCHESTRATOR` | Agents planning |
 | Translation | `TRANSLATION_MODEL` | OCR translation |
-| Vision | `CHAT_MODEL_FAST` + `MMPROJ_FILE_QWEN3` | Image understanding (Qwen3VL) |
+| Vision | `CHAT_MODEL_FAST` + `MMPROJ_FILE` | Image understanding encoder |
 | Embedding | `EMBEDDING_MODEL` | nomic-embed-text (768d) |
 | Detector | `DETECTOR_MODEL` | PyTorch bubble detection |
 
@@ -239,7 +242,7 @@ All inference parameters are resolved at request time with a 3-tier priority:
 Request field → .env setting → Hard fallback
 ```
 
-Key parameters: `n_ctx` (default 32768), `n_gpu_layers` (-1 = all), `flash_attn`, `type_k/type_v` (Q8 KV cache), `top_k`, `min_p`, `repeat_penalty`.
+Key parameters: `n_ctx` (default 32768), `n_gpu_layers` (-1 = all), `flash_attn`, `type_k/type_v` (Q4 KV cache), `top_k`, `min_p`, `repeat_penalty`.
 
 ### Key Endpoints
 
@@ -410,6 +413,7 @@ MODELS_DIR=D:\models
 # Model filenames — must exist in MODELS_DIR
 CHAT_MODEL_FAST
 CHAT_MODEL_THINKING
+CHAT_MODEL_CREATIVE
 CHAT_MODEL_AGENT
 CHAT_MODEL_ORCHESTRATOR
 TRANSLATION_MODEL
@@ -417,17 +421,17 @@ MMPROJ_FILE_
 EMBEDDING_MODEL=nomic-embed-text-v1.5.Q8_0.gguf
 
 # Inference
-N_GPU_LAYERS=-1       # -1 = all layers on GPU
-N_CTX=32768
-MAX_TOKENS=32768
+N_GPU_LAYERS=-1       # -1 if 16 GB VRAM or more
+N_CTX=262144
+MAX_TOKENS=262144
 FLASH_ATTN=true
-KV_TYPE_K=2           # Q8 KV cache
+KV_TYPE_K=2           
 KV_TYPE_V=2
-TEMPERATURE=0.7
+TEMPERATURE=0.6
 TOP_P=0.9
-TOP_K=40
+TOP_K=20
 MIN_P=0.05
-REPEAT_PENALTY=1.1
+REPEAT_PENALTY=1
 ```
 
 ---
