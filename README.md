@@ -131,46 +131,46 @@ Toggle **Agentic Mode** from the chat interface to activate the full autonomous 
           User Request
                │
                ▼
-          ┌───────────────────────────────────────────────────────────────────┐
-          │  Stage 1  │ Memory Agent       │ Parallel retrieval from all 3    │
-          │           │                    │ Qdrant collections + AI format   │
-          ├───────────┼────────────────────┼──────────────────────────────────│
-          │  Stage 2  │ Reflector (mid)    │ Reviews context before planning  │
-          ├───────────┼────────────────────┼──────────────────────────────────│
-          │  Stage 3  │ Orchestrator       │ Produces JSON step-by-step plan  │
-          │           │                    │ (model: CHAT_MODEL_ORCHESTRATOR) │
-          ├───────────┼────────────────────┼──────────────────────────────────│
-          │  Gate 1   │ User Approval      │ UI halts — user edits/approves   │
-          ├───────────┼────────────────────┼──────────────────────────────────│
-          │  Stage 4  │ Executor           │ Sequential step runner with      │
-          │           │                    │ WorkingMemory accumulation       │
-          │           │  ├─ Sub-Agents ──► │ Analysis, Coding, Translator,    │
-          │           │  │                 │ Web Search, Content Writing      │
-          │           │  └─ Tool calls ──► │ memory_search, doc_search,       │
-          │           │                    │ web_search, web_fetch            │
-          ├───────────┼────────────────────┼──────────────────────────────────│
-          │  Gate 2   │ HITL Dispatcher    │ Destructive tools (memory_write, │
-          │           │                    │ memory_delete) pause and wait for│
-          │           │                    │ explicit user confirm/cancel     │
-          ├───────────┼────────────────────┼──────────────────────────────────│
-          │  Stage 5  │ Reflector (exec)   │ Reviews raw tool results for gaps│
-          ├───────────┼────────────────────┼──────────────────────────────────│
-          │  Stage 6  │ Synthesizer        │ Drafts coherent final response   │
-          │           │                    │ from all WorkingMemory results   │
-          ├───────────┼────────────────────┼──────────────────────────────────│
-          │  Stage 7  │ Evaluator          │ JSON score: passed, failed_steps,│
-          │           │                    │ feedback vs. original plan       │
-          ├───────────┼────────────────────┼──────────────────────────────────│
-          │  Stage 8  │ Consensus          │ Two independent AI passes must   │
-          │           │                    │ both agree the answer is valid   │
-          ├───────────┼────────────────────┼──────────────────────────────────│
-          │  Stage 9  │ Reflector (final)  │ JSON gate: {is_satisfactory,     │
-          │           │                    │ feedback}. If false → redo loop  │
-          │           │                    │ back to Synthesizer (max 3×)     │
-          ├───────────┼────────────────────┼──────────────────────────────────│
-          │  Stage 10 │ Final Output       │ Verified markdown streamed       │
-          │           │                    │ and saved to PostgreSQL          │
-          └───────────────────────────────────────────────────────────────────┘
+          ┌────────────────────────────────────────────────────────────────────┐
+          │  Stage 1  │ Memory Agent       │ Parallel retrieval from all 3     │
+          │           │                    │ Qdrant collections + AI format    │
+          ├───────────┼────────────────────┼───────────────────────────────────│
+          │  Stage 2  │ Reflector (mid)    │ Reviews context before planning   │
+          ├───────────┼────────────────────┼───────────────────────────────────│
+          │  Stage 3  │ Orchestrator       │ Produces JSON step-by-step plan   │
+          │           │                    │ (model: CHAT_MODEL_ORCHESTRATOR)  │
+          ├───────────┼────────────────────┼───────────────────────────────────│
+          │  Gate 1   │ User Approval      │ UI halts — user edits/approves    │
+          ├───────────┼────────────────────┼───────────────────────────────────│
+          │  Stage 4  │ Executor           │ Sequential step runner with       │
+          │           │                    │ WorkingMemory accumulation        │
+          │           │  ├─ Sub-Agents ──► │ Analysis, Coding, Translator,     │
+          │           │  │                 │ Web Search, Content Writing       │
+          │           │  └─ Tool calls ──► │ memory_search, doc_search,        │
+          │           │                    │ web_search, web_fetch             │
+          ├───────────┼────────────────────┼───────────────────────────────────│
+          │  Gate 2   │ HITL Dispatcher    │ Destructive tools (memory_write,  │
+          │           │                    │ memory_delete) pause and wait for │
+          │           │                    │ explicit user confirm/cancel      │
+          ├───────────┼────────────────────┼───────────────────────────────────│
+          │  Stage 5  │ Reflector (exec)   │ Reviews raw tool results for gaps │
+          ├───────────┼────────────────────┼───────────────────────────────────│
+          │  Stage 6  │ Synthesizer        │ Drafts coherent final response    │
+          │           │                    │ from all WorkingMemory results    │
+          ├───────────┼────────────────────┼───────────────────────────────────│
+          │  Stage 7  │ Evaluator          │ JSON score: passed, failed_steps, │
+          │           │                    │ feedback vs. original plan        │
+          ├───────────┼────────────────────┼───────────────────────────────────│
+          │  Stage 8  │ Consensus          │ Two independent AI passes must    │
+          │           │                    │ both agree the answer is valid    │
+          ├───────────┼────────────────────┼───────────────────────────────────│
+          │  Stage 9  │ Reflector (final)  │ JSON gate: {is_satisfactory,      │
+          │           │                    │ feedback}. If false → redo loop   │
+          │           │                    │ back to Synthesizer (max 3×)      │
+          ├───────────┼────────────────────┼───────────────────────────────────│
+          │  Stage 10 │ Final Output       │ Verified markdown streamed        │
+          │           │                    │ and saved to PostgreSQL           │
+          └────────────────────────────────────────────────────────────────────┘
 
 ```
 
