@@ -67,7 +67,7 @@ export default function App() {
       </AnimatePresence>
 
       {/* Music player lives outside the route animation so it never unmounts */}
-      {!isAuthPage && (
+      {!isAuthPage && location.pathname === '/' && (
         <div className="fixed bottom-3 left-4 md:left-[285px] right-6 z-[100] pointer-events-none">
           <MusicPlayer />
         </div>

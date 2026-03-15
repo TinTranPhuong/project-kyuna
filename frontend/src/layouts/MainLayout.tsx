@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import Sidebar from '@/components/layout/Sidebar';
 import Topbar from '@/components/layout/Topbar';
 import ThemeBackground from '@/components/ui/ThemeBackground';
+import { cn } from '@/lib/utils';
 
 export default function MainLayout() {
   const location = useLocation();
@@ -27,7 +28,7 @@ export default function MainLayout() {
         </div>
         
         {/* Scrollable Page Content (z-10) */}
-        <main className="flex-1 relative flex flex-col min-w-0 overflow-hidden pb-24">
+        <main className={cn("flex-1 relative flex flex-col min-w-0 overflow-hidden", location.pathname === '/' ? "pb-24" : "")}>
           
           <AnimatePresence mode="wait">
             <motion.div

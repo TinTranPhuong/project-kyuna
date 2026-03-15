@@ -24,3 +24,5 @@ qdrant-client>=1.7.0
 tiktoken>=0.6.0
 pypdf>=4.0.0
 python-docx>=1.0.0
+openpyxl>=3.1.0
+python-pptx>=0.6.21

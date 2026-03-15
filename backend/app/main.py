@@ -10,7 +10,7 @@ from sqlalchemy import text
 from app.core.limiter import limiter
 from app.core.config import settings
 from app.core.database import engine, Base
-from app.routers import auth, users, sessions, chat, translator, note, dashboard, memory, documents, agent
+from app.routers import auth, users, sessions, chat, translator, note, dashboard, memory, documents, agent, files
 from app.services.qdrant_service import qdrant_service
 
 import app.models.user        # noqa: F401
@@ -92,6 +92,7 @@ app.include_router(dashboard.router,  prefix="/api/v1/dashboard", tags=["dashboa
 app.include_router(memory.router,     prefix="/api/v1/memory",    tags=["memory"])
 app.include_router(documents.router,  prefix="/api/v1/docs",      tags=["documents"])
 app.include_router(agent.router,      prefix="/api/v1/agent",     tags=["agent"])
+app.include_router(files.router,      prefix="/api/v1/files",     tags=["files"])
 
 @app.get("/health")
 async def health_check():

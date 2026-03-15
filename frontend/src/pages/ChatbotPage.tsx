@@ -104,7 +104,7 @@ export default function ChatbotPage() {
             </div>
 
             {/* Conversation List */}
-            <div className="flex-1 overflow-y-auto border-y border-white/10 p-2">
+            <div className="flex-1 overflow-hidden border-y border-white/10 p-2 flex flex-col">
               <ConversationList />
             </div>
           </div>
@@ -125,7 +125,7 @@ export default function ChatbotPage() {
                   <X className="w-6 h-6" />
                 </button>
               </div>
-              <div className="h-[40%] overflow-y-auto border-b border-white/10 p-2">
+              <div className="h-[40%] overflow-hidden flex flex-col border-b border-white/10 p-2">
                 <ConversationList />
               </div>
               <div className="flex-1 overflow-y-auto p-4 space-y-6">

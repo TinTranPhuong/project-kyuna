@@ -140,7 +140,7 @@ export const ConversationList = () => {
       </div>
 
       {/* Scrollable List */}
-      <div className="flex-1 overflow-y-auto custom-scrollbar px-1">
+      <div className="flex-1 overflow-y-auto custom-scrollbar px-1 min-h-0">
         <div className="space-y-1">
           <AnimatePresence mode="popLayout">
             {filteredConversations.map((conv) => (

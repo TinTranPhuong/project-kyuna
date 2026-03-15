@@ -1,10 +1,14 @@
 import logging
-from duckduckgo_search import DDGS
 import asyncio
 import httpx
 from bs4 import BeautifulSoup
+from duckduckgo_search import DDGS
 
 from app.services.qdrant_service import qdrant_service
+from app.services.file_generator import (
+    generate_docx, generate_xlsx, generate_pptx, build_save_path
+)
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +105,63 @@ async def doc_summarize(user_id: str, doc_id: str) -> str:
     """Mock document summarize."""
     return f"Summary for {doc_id} (mock)."
 
+
+# ── File Creation Tool Functions ──────────────────────────────────────────────
+
+def _get_backend_base_url() -> str:
+    """Resolve the backend base URL for building absolute download links."""
+    return getattr(settings, "PUBLIC_BACKEND_URL", None) or "http://localhost:8000"
+
+
+async def create_docx(user_id: str, title: str, content: str) -> str:
+    """
+    Generate a Word document (.docx) from markdown content.
+    Returns a human-readable string with a markdown download link.
+    """
+    try:
+        save_path = build_save_path(settings.UPLOAD_DIR, user_id, title, ".docx")
+        generate_docx(title, content, save_path)
+        base = _get_backend_base_url()
+        download_url = f"{base}/api/v1/files/download/{user_id}/{save_path.name}"
+        return f"File created successfully: **{save_path.name}**\nDownload link: [📄 Download {save_path.name}]({download_url})"
+    except Exception as e:
+        logger.error(f"create_docx failed: {e}")
+        return f"Error creating document: {e}"
+
+
+async def create_xlsx(user_id: str, title: str, rows: list) -> str:
+    """
+    Generate an Excel spreadsheet (.xlsx) from a list of rows.
+    First row is treated as the header. Returns a string with a markdown download link.
+    """
+    try:
+        save_path = build_save_path(settings.UPLOAD_DIR, user_id, title, ".xlsx")
+        generate_xlsx(title, rows, save_path)
+        base = _get_backend_base_url()
+        download_url = f"{base}/api/v1/files/download/{user_id}/{save_path.name}"
+        return f"File created successfully: **{save_path.name}**\nDownload link: [📊 Download {save_path.name}]({download_url})"
+    except Exception as e:
+        logger.error(f"create_xlsx failed: {e}")
+        return f"Error creating spreadsheet: {e}"
+
+
+async def create_pptx(user_id: str, title: str, slides: list) -> str:
+    """
+    Generate a PowerPoint presentation (.pptx) from slides data.
+    `slides` = [{"title": str, "bullets": list[str]}]
+    Returns a string with a markdown download link.
+    """
+    try:
+        save_path = build_save_path(settings.UPLOAD_DIR, user_id, title, ".pptx")
+        generate_pptx(title, slides, save_path)
+        base = _get_backend_base_url()
+        download_url = f"{base}/api/v1/files/download/{user_id}/{save_path.name}"
+        return f"File created successfully: **{save_path.name}**\nDownload link: [📊 Download {save_path.name}]({download_url})"
+    except Exception as e:
+        logger.error(f"create_pptx failed: {e}")
+        return f"Error creating presentation: {e}"
+
+
 # Tool Registry map
 TOOL_REGISTRY = {
     "memory_search": {
@@ -163,5 +224,24 @@ TOOL_REGISTRY = {
         "description": "Summarize an existing document by its ID.",
         "requires_hitl": False,
         "domain": "docs"
-    }
+    },
+    # ── File Creation Tools ───────────────────────────────────────────────
+    "create_docx": {
+        "fn": create_docx,
+        "description": "Create a .docx Word document from the given title and markdown content. Returns a download URL.",
+        "requires_hitl": False,
+        "domain": "files"
+    },
+    "create_xlsx": {
+        "fn": create_xlsx,
+        "description": "Create a .xlsx Excel spreadsheet with the given title and rows (list of lists, first row = headers). Returns a download URL.",
+        "requires_hitl": False,
+        "domain": "files"
+    },
+    "create_pptx": {
+        "fn": create_pptx,
+        "description": "Create a .pptx PowerPoint presentation with the given title and slides (list of {title, bullets} dicts). Returns a download URL.",
+        "requires_hitl": False,
+        "domain": "files"
+    },
 }

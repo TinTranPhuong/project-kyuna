@@ -145,6 +145,11 @@ export const ChatMessage = memo(({ message, isStreaming }: ChatMessageProps) => 
                     h3: ({ children }) => <h3 className="text-lg font-semibold mb-3 mt-4 text-white">{children}</h3>,
                     strong: ({ children }) => <strong className="font-bold text-white">{children}</strong>,
                     blockquote: ({ children }) => <blockquote className="border-l-4 border-primary-500/50 pl-4 py-2 my-4 bg-black/20 rounded-r-lg italic text-white/70">{children}</blockquote>,
+                    a: ({ children, href }) => (
+                      <a href={href} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 px-3 py-1.5 mt-2 mb-2 text-sm font-medium text-white bg-primary-600/80 hover:bg-primary-500 rounded-md transition-colors border border-primary-500/30 shadow-sm no-underline">
+                        {children}
+                      </a>
+                    ),
 
                     // --- TABLE STYLING ---
                     table: ({ children }) => <div className="overflow-x-auto my-6 border border-white/20 rounded-lg"><table className="w-full text-sm text-left text-white/90">{children}</table></div>,

@@ -262,9 +262,127 @@ async def stream_chat_response(db: AsyncSession, user_id: str, conversation_id: 
     stream_start = time.time()
 
     try:
+        from app.services.agents.tool_registry import TOOL_REGISTRY
+
+        buffer_str = ""
+        is_capturing_tool = False
+        tool_content_str = ""
+
         async for token in ai_client.chat_stream(messages_payload, target_model, is_vision=is_vision):
-            accumulated_content.append(token)
-            yield f"data: {json.dumps({'token': token})}\n\n"
+            buffer_str += token
+            
+            if not is_capturing_tool:
+                if "<tool>" in buffer_str:
+                    is_capturing_tool = True
+                    idx = buffer_str.index("<tool>")
+                    before = buffer_str[:idx]
+                    if before:
+                        accumulated_content.append(before)
+                        yield f"data: {json.dumps({'token': before})}\n\n"
+                    tool_content_str = buffer_str[idx:]
+                    buffer_str = ""
+                elif any(buffer_str.endswith(prefix) for prefix in ["<", "<t", "<to", "<too", "<tool"]):
+                    # Wait for next token to confirm if it's a tool tag
+                    pass
+                else:
+                    accumulated_content.append(buffer_str)
+                    yield f"data: {json.dumps({'token': buffer_str})}\n\n"
+                    buffer_str = ""
+            else:
+                tool_content_str += token
+                buffer_str = "" 
+                
+                if "</tool>" in tool_content_str:
+                    is_capturing_tool = False
+                    idx = tool_content_str.index("</tool>") + len("</tool>")
+                    tool_json_block = tool_content_str[:idx]
+                    after = tool_content_str[idx:]
+                    
+                    try:
+                        inner_text = tool_json_block.replace("<tool>", "").replace("</tool>", "").strip()
+                        
+                        # Strip standard markdown fences if present
+                        if inner_text.startswith("```json"):
+                            inner_text = inner_text[7:]
+                        elif inner_text.startswith("```"):
+                            inner_text = inner_text[3:]
+                        if inner_text.endswith("```"):
+                            inner_text = inner_text[:-3]
+                        
+                        inner_json = inner_text.strip()
+                        
+                        # Emergency fallback: if there's text before/after the { ... }, extract just the JSON
+                        if not inner_json.startswith("{") and "{" in inner_json and "}" in inner_json:
+                            start_idx = inner_json.find("{")
+                            end_idx = inner_json.rfind("}") + 1
+                            inner_json = inner_json[start_idx:end_idx]
+                        
+                        # Lenient parsing for missing trailing braces
+                        parsed = False
+                        tool_req = None
+                        for suffix in ["", "}", "}}", '"', '"}', '"}}']:
+                            try:
+                                tool_req = json.loads(inner_json + suffix, strict=False)
+                                parsed = True
+                                break
+                            except json.JSONDecodeError:
+                                pass
+                        
+                        if not parsed:
+                            # regex fallback for unescaped quotes in markdown
+                            import re
+                            name_match = re.search(r'"name"\s*:\s*"([^"]+)"', inner_json)
+                            if name_match:
+                                t_n = name_match.group(1)
+                                if t_n == "create_docx":
+                                    title_match = re.search(r'"title"\s*:\s*"([^"]+)"', inner_json)
+                                    c_title = title_match.group(1) if title_match else "Document"
+                                    c_match = re.search(r'"content"\s*:\s*"(.*)', inner_json, re.DOTALL)
+                                    if c_match:
+                                        c_text = c_match.group(1)
+                                        c_text = re.sub(r'"?\s*\}?\s*\}?\s*$', '', c_text)
+                                        c_text = c_text.replace('\\n', '\n').replace('\\"', '"')
+                                        tool_req = {"name": t_n, "args": {"title": c_title, "content": c_text}}
+                                        parsed = True
+                        
+                        if not parsed:
+                            raise ValueError("Could not decode tool JSON even with lenient suffixes.")
+                        
+                        t_name = tool_req.get("name")
+                        t_args = tool_req.get("args", {})
+                        
+                        if t_name in ["create_docx", "create_xlsx", "create_pptx"] and t_name in TOOL_REGISTRY:
+                            t_args["user_id"] = user_id
+                            msg_token = f"\n\n*Generating {t_name}...*\n"
+                            yield f"data: {json.dumps({'token': msg_token})}\n\n"
+                            
+                            # Execute the tool
+                            from app.services.agents.tool_registry import TOOL_REGISTRY
+                            tool_fn = TOOL_REGISTRY[t_name]["fn"]
+                            result = await tool_fn(**t_args)
+                            
+                            res_str = f"\n\n{result}\n\n"
+                            formatted_res = res_str.replace("\\n", "\n")
+                            accumulated_content.append(formatted_res)
+                            yield f"data: {json.dumps({'token': formatted_res})}\n\n"
+                        else:
+                            accumulated_content.append(tool_json_block)
+                            yield f"data: {json.dumps({'token': tool_json_block})}\n\n"
+                            
+                    except Exception as e:
+                        logger.error(f"Failed to execute inline tool. JSON was: {repr(inner_json)} Error: {e}")
+                        accumulated_content.append(tool_json_block)
+                        yield f"data: {json.dumps({'token': tool_json_block})}\n\n"
+                        
+                    buffer_str = after
+                    tool_content_str = ""
+
+        if buffer_str and not is_capturing_tool:
+            accumulated_content.append(buffer_str)
+            yield f"data: {json.dumps({'token': buffer_str})}\n\n"
+        elif is_capturing_tool:
+            accumulated_content.append(tool_content_str)
+            yield f"data: {json.dumps({'token': tool_content_str})}\n\n"
 
     except Exception as e:
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
