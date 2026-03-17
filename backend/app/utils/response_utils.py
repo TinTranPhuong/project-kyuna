@@ -1,5 +1,20 @@
+import re
+
 def strip_think_tags(text: str) -> str:
     """Strips <think> tags and markdown backticks from model output before JSON parsing."""
+    # Remove complete <think>...</think> blocks (including multiline)
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+    
+    # Handle unclosed <think> at the start (model used think without closing) 
+    if '<think>' in text and '</think>' not in text:
+        # Remove everything from <think> onwards if it's at the start
+        idx = text.find('<think>')
+        if idx == 0:
+            text = ''
+        else:
+            text = text[:idx].strip()
+    
+    # Handle orphan </think> (model output </think> without <think>)
     if "</think>" in text:
         text = text.split("</think>")[-1].strip()
         

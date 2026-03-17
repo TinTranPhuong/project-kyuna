@@ -1,19 +1,24 @@
 import React from 'react';
 import { useChatStore } from '@/store/chatStore';
-import { Zap, BrainCircuit, Bot, Sparkles } from 'lucide-react';
+import { Zap, BrainCircuit, Bot, Sparkles, Code2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { ChevronDown, Check } from 'lucide-react';
 
+import { useLocation } from 'react-router-dom';
+
 export const ModeSelector: React.FC = () => {
   const { selectedMode, setMode } = useChatStore();
+  const location = useLocation();
+  const isCodeWorkspace = location.pathname.startsWith('/code-workspace');
 
   const modes = [
     { id: 'fast', name: 'FAST', icon: Zap, desc: 'Im fast as fuck boi', color: 'text-blue-400' },
     { id: 'thinking', name: 'THINKING', icon: BrainCircuit, desc: 'Shhh, Im overthinking', color: 'text-purple-400' },
     { id: 'creative', name: 'CREATIVE', icon: Sparkles, desc: 'As Id say, use it responsibly', color: 'text-pink-400' },
-    { id: 'agentic', name: 'AGENTIC', icon: Bot, desc: 'Me and da bois at 3AM executing your tasks', color: 'text-amber-400' }
-  ] as const; 
+    { id: 'agentic', name: 'AGENTIC', icon: Bot, desc: 'Me and da bois at 3AM executing your tasks', color: 'text-amber-400' },
+    ...(isCodeWorkspace ? [{ id: 'coding' as const, name: 'CODING', icon: Code2, desc: 'Code workspace agents', color: 'text-emerald-400' }] : []),
+  ] as const;
 
   const currentMode = modes.find(m => m.id === selectedMode) || modes[0];
   const CurrentIcon = currentMode.icon;

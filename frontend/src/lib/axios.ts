@@ -48,7 +48,13 @@ axiosInstance.interceptors.response.use(
   async (error: AxiosError) => {
     const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean }
 
-    if (error.response?.status !== 401 || originalRequest._retry) {
+    // Don't intercept 401s from auth endpoints — they have their own semantics
+    // (e.g. "wrong password"), not "expired token".
+    const authPaths = ['/api/v1/auth/login', '/api/v1/auth/register', '/api/v1/auth/refresh']
+    const requestUrl = originalRequest.url || ''
+    const isAuthEndpoint = authPaths.some((p) => requestUrl.includes(p))
+
+    if (error.response?.status !== 401 || originalRequest._retry || isAuthEndpoint) {
       return Promise.reject(error)
     }
 

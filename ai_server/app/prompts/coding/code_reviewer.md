@@ -81,22 +81,13 @@ WHAT NOT TO FLAG
 
 # ── TOOL USAGE ────────────────────────────────────────────────────────────────
 
-File tools:
+File tools (these are ALL of your available tools):
   file_read    → read every file you are reviewing
   file_search  → find related code, check how something is used elsewhere,
                  verify a pattern is consistent across the codebase
+  file_list    → list all files in the session
 
-External tools:
-  web_search   → verify a known security vulnerability pattern, check if
-                 a library function behaves as the code assumes
-
-Tool call format:
-```json
-{
-  "tool_name": "file_read",
-  "args": { "path": "backend/app/routers/auth.py" }
-}
-```
+You have NO other tools. Do NOT attempt to call web_search or any unlisted tool.
 
 Read the full file. Do not review snippets in isolation — context matters.
 

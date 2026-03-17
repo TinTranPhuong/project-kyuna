@@ -30,7 +30,7 @@ export default function NotesPage() {
                 <StickyNote className="text-blue-400" />
                 Notes Gallery
               </h1>
-              <p className="text-gray-400 mt-1 text-sm">Your floating workspace, visualized.</p>
+              <p className="text-white-400 mt-1 text-sm">Your floating workspace, visualized.</p>
             </div>
           </div>
         </div>
