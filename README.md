@@ -27,6 +27,7 @@ Kyuna is a personal AI workspace that runs entirely on your own GPU. It combines
 - **RAG** — upload documents and have the AI retrieve and reference them in every reply
 - **Translate** images to English using a 6-stage OCR + LLM pipeline
 - **Control your memory** — view, edit, promote, or delete every fact the AI has learned about you
+- **Code Workspace** — an integrated AI-Agents coding environment with file explorer, Monaco editor, and chat
 
 ---
 
@@ -281,6 +282,18 @@ Image upload
 
 ---
 
+## Code Workspace
+
+An interactive, integrated AI-powered development environment directly in your browser:
+
+- **Monaco Editor**: Full code editing capabilities with syntax highlighting, custom themes (e.g., Catppuccin), and multi-tab support.
+- **File Management**: Create, rename, edit, and delete files or folders within an active coding session. Upload or download entire workspace archives as `.zip`.
+- **Coding Agents**: Chat with a specialized multi-agent coding pipeline that can read your active file, write new code, apply targeted file patches, and stream responses back in real-time.
+- **Session Persistence**: Workspaces are saved and can be resumed at any time, keeping your project files and AI chat history intact.
+
+
+---
+
 ## Frontend
 
 Built with **React 18 + Vite + TypeScript + Tailwind CSS**. All AI responses are consumed as Server-Sent Events (SSE) and progressively rendered in the UI.
@@ -291,6 +304,7 @@ Built with **React 18 + Vite + TypeScript + Tailwind CSS**. All AI responses are
 |------|-------|-------------|
 | **Home** | `/` | Dashboard with widgets (clock, timer, music player, notes) |
 | **Chat** | `/chat` | Main chat interface — mode selector, SSE token streaming, memory context badge |
+| **Code Workspace** | `/code-workspace` | Integrated IDE with multi-file support, Monaco editor, and AI-Agents coding assistant |
 | **Memory** | `/memory` | View, edit, promote, and delete extracted facts and universal entries |
 | **Documents** | `/docs` | Upload and manage documents for RAG |
 | **Translator** | `/translator` | Image upload → OCR → translation canvas |
@@ -432,68 +446,6 @@ TOP_P=0.9
 TOP_K=20
 MIN_P=0.05
 REPEAT_PENALTY=1
-```
-
----
-
-## Project Structure
-
-```text
-project-kyuna/
-│
-├── frontend/                           # React + Vite + TypeScript
-│   └── src/
-│       ├── components/                 # Reusable UI components
-│       ├── hooks/                      # Custom React hooks
-│       ├── pages/                      # Application pages
-│       ├── services/                   # Axios API clients
-│       ├── store/                      # Zustand state management
-│       └── types/                      # TypeScript interfaces
-│
-├── backend/                            # FastAPI REST API
-│   └── app/
-│       ├── core/                       # Config, DB, security
-│       ├── models/                     # SQLAlchemy ORM models
-│       ├── routers/                    # API endpoints
-│       ├── schemas/                    # Pydantic schemas
-│       ├── services/
-│       │   ├── agents/                 # Agentic pipeline
-│       │   │   ├── sub_agents/         # Analysis, Coding, Translator, WebSearch, ContentWriting
-│       │   │   ├── orchestrator.py     # JSON plan generation
-│       │   │   ├── executor.py         # Sequential step runner
-│       │   │   ├── dispatcher.py       # Tool dispatch + HITL Gate 2
-│       │   │   ├── reflector.py        # 3-phase reflection (mid/exec/final)
-│       │   │   ├── synthesizer.py      # Final answer synthesis
-│       │   │   ├── evaluator.py        # JSON scoring vs. plan
-│       │   │   ├── consensus.py        # Dual-pass fact/answer verification
-│       │   │   ├── memory_agent.py     # Parallel 3-layer memory retrieval
-│       │   │   └── tool_registry.py    # Tool definitions + HITL flags
-│       │   ├── chat_service.py         # RAG pipeline + SSE streaming
-│       │   ├── context_assembler.py    # Token-budget context builder
-│       │   ├── embedding_service.py    # nomic-embed-text wrapper
-│       │   ├── memory_service.py       # Memory CRUD + promote
-│       │   ├── qdrant_service.py       # Vector DB operations
-│       │   └── document_service.py     # Chunking, embedding, indexing
-│       └── workers/
-│           └── extraction_worker.py    # Background fact extraction
-│
-├── ai_server/                          # llama.cpp inference server
-│   └── app/
-│       ├── services/
-│       │   └── model_manager.py        # Single-GPU CUDA executor + Hangoff Protocol
-│       ├── routers/
-│       │   ├── chat.py                 # OpenAI-compatible SSE endpoint
-│       │   ├── memory.py               # Fact extraction endpoint
-│       │   ├── embeddings.py           # Embedding endpoint
-│       │   ├── models.py               # Model load/unload/list
-│       │   └── translate.py            # OCR + translation pipeline
-│       └── prompts/
-│           ├── chats/                  # fast.md, thinking.md, creative.md
-│           └── agents/                 # orchestrator.md, reflector.md,
-│                                       # synthesizer.md, evaluator.md,
-│                                       # consensus.md, memory_agent.md
-│
-└── qdrant/                             # Qdrant vector DB (native binary + data)
 ```
 
 ---
