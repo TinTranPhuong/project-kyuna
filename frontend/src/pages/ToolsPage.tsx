@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { StickyNote, Languages, ArrowRight, Wrench } from 'lucide-react';
+import { StickyNote, Languages, ArrowRight, Wrench, Code2 } from 'lucide-react';
 
 export default function ToolsPage() {
   const navigate = useNavigate();
@@ -23,6 +23,15 @@ export default function ToolsPage() {
       action: () => navigate('/translate'),
       gradient: 'from-purple-500/20 to-purple-900/10',
       hoverBorder: 'hover:border-purple-500/50',
+    },
+    {
+      id: 'code-workspace',
+      name: 'Code Workspace',
+      description: 'AI-powered coding environment with 9 specialist agents.',
+      icon: <Code2 size={32} className="text-emerald-400" />,
+      action: () => navigate('/code-workspace'),
+      gradient: 'from-emerald-500/20 to-emerald-900/10',
+      hoverBorder: 'hover:border-emerald-500/50',
     }
   ];
 
@@ -36,11 +45,11 @@ export default function ToolsPage() {
       >
         <div className="flex items-center gap-4 mb-8">
           <div className="p-3 bg-white/10 rounded-xl backdrop-blur-md border border-white/10">
-            <Wrench size={28} className="text-gray-200" />
+            <Wrench size={28} className="text-black-400" />
           </div>
           <div>
             <h1 className="text-3xl font-bold tracking-tight">Tools Hub</h1>
-            <p className="text-gray-400 mt-1">Access your development and productivity utilities.</p>
+            <p className="text-white-400 mt-1">Access your development and productivity utilities.</p>
           </div>
         </div>
 

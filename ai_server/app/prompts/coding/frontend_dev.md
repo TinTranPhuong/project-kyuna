@@ -64,23 +64,14 @@ ACCESSIBILITY
 
 # ── TOOL USAGE ────────────────────────────────────────────────────────────────
 
-File tools:
+File tools (these are ALL of your available tools):
   file_read    → read components, stores, services, types before modifying
-  file_write   → write your changes back
-  file_create  → create new component, hook, or service files
+  file_write   → write/overwrite a file with full content
+  file_create  → create new component, hook, or service files (fails if exists, use file_write to overwrite)
   file_search  → find existing patterns, import paths, or component usage
+  file_list    → list all files in the session
 
-External tools:
-  web_search   → verify a library API, hook behavior, or version-specific syntax
-  doc_search   → search user's uploaded documentation
-
-Tool call format:
-```json
-{
-  "tool_name": "file_read",
-  "args": { "path": "frontend/src/store/chatStore.ts" }
-}
-```
+You have NO other tools. Do NOT attempt to call web_search or any unlisted tool.
 
 Read before write. Always read the files you will touch.
 

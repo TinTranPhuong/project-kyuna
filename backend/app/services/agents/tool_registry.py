@@ -244,4 +244,47 @@ TOOL_REGISTRY = {
         "requires_hitl": False,
         "domain": "files"
     },
+    # ── Coding File Tools ─────────────────────────────────────────────────
+    "file_read": {
+        "fn": None,  # Handled by coding pipeline directly
+        "description": "Read file content from the coding session.",
+        "requires_hitl": False,
+        "domain": "coding_files"
+    },
+    "file_write": {
+        "fn": None,
+        "description": "Write/overwrite a file in the coding session.",
+        "requires_hitl": False,
+        "domain": "coding_files"
+    },
+    "file_create": {
+        "fn": None,
+        "description": "Create a new file in the coding session.",
+        "requires_hitl": False,
+        "domain": "coding_files"
+    },
+    "file_delete": {
+        "fn": None,
+        "description": "Delete a file from the coding session.",
+        "requires_hitl": True,
+        "domain": "coding_files"
+    },
+    "file_list": {
+        "fn": None,
+        "description": "List full file tree of the coding session.",
+        "requires_hitl": False,
+        "domain": "coding_files"
+    },
+    "file_rename": {
+        "fn": None,
+        "description": "Rename a file or directory in the coding session.",
+        "requires_hitl": False,
+        "domain": "coding_files"
+    },
+    "file_search": {
+        "fn": None,
+        "description": "Grep-style search across all session files.",
+        "requires_hitl": False,
+        "domain": "coding_files"
+    },
 }

@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     AI_SERVER_URL: str = "http://localhost:8001"
     UPLOAD_DIR: str = "./uploads"
     WALLPAPER_DIR: str = "./uploads/wallpapers"
+    CODING_SESSIONS_DIR: str = "./uploads/coding_sessions"
     MAX_UPLOAD_SIZE_MB: int = 100
     CHAT_MODEL_AGENT: str = ""
     CHAT_MODEL_ORCHESTRATOR: str = ""

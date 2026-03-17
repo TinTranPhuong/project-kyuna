@@ -30,7 +30,7 @@ const MemoryPage: React.FC = () => {
         
         <header className="mb-8">
           <h1 className="text-3xl font-bold text-white">Memory & Knowledge</h1>
-          <p className="text-gray-400 mt-2">
+          <p className="text-white-400 mt-2">
             Manage your AI's extracted memories, universal facts, and uploaded documents.
           </p>
         </header>

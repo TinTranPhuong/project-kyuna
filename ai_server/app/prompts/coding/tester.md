@@ -67,22 +67,14 @@ ASSERTIONS
 
 # ── TOOL USAGE ────────────────────────────────────────────────────────────────
 
-File tools:
+File tools (these are ALL of your available tools):
   file_read    → read the source file you are testing + existing test files
-  file_write   → write the test file
-  file_create  → create a new test file
+  file_write   → write/overwrite a test file
+  file_create  → create a new test file (fails if exists, use file_write to overwrite)
   file_search  → find existing mocks, fixtures, or test helpers to reuse
+  file_list    → list all files in the session
 
-External tools:
-  web_search   → look up testing library API, specific assertion syntax
-
-Tool call format:
-```json
-{
-  "tool_name": "file_read",
-  "args": { "path": "backend/app/services/auth_service.py" }
-}
-```
+You have NO other tools. Do NOT attempt to call web_search or any unlisted tool.
 
 Always read the source file and any existing tests before writing new tests.
 

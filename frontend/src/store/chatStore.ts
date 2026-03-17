@@ -23,7 +23,7 @@ interface ChatState {
   isStreaming: boolean;
   currentStreamContent: string;
   selectedModel: string;
-  selectedMode: 'fast' | 'thinking' | 'agentic' | 'creative';
+  selectedMode: 'fast' | 'thinking' | 'agentic' | 'creative' | 'coding';
   abortController: AbortController | null;
   lastMemoryContext: { memories: number; chunks: number; universals: number } | null;
   agentState: AgentState | null;

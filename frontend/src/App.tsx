@@ -24,6 +24,8 @@ import ToolsPage from '@/pages/ToolsPage';
 import MusicPlayer from '@/components/music/MusicPlayer';
 import NotesPage from '@/pages/NotesPage';
 import MemoryPage from '@/pages/MemoryPage'
+import CodeWorkspaceListPage from '@/pages/CodeWorkspaceListPage';
+import CodeWorkspacePage from '@/pages/CodeWorkspacePage';
 
 export default function App() {
   const location = useLocation();
@@ -58,6 +60,8 @@ export default function App() {
               <Route path="/notes"     element={<NotesPage />} />
               <Route path="/tools"     element={<ToolsPage />} />
               <Route path="/memory"    element={<MemoryPage />} />
+              <Route path="/code-workspace" element={<CodeWorkspaceListPage />} />
+              <Route path="/code-workspace/:id" element={<CodeWorkspacePage />} />
             </Route>
           </Route>
 

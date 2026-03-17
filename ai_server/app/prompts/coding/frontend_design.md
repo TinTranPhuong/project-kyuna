@@ -68,22 +68,14 @@ TAILWIND SPECIFICS
 
 # ── TOOL USAGE ────────────────────────────────────────────────────────────────
 
-File tools:
+File tools (these are ALL of your available tools):
   file_read    → read existing components to understand current styles
-  file_write   → write style changes back to files
+  file_write   → write/overwrite style changes back to files
+  file_create  → create new CSS, style, or layout files (fails if exists, use file_write to overwrite)
   file_search  → find where a color, class, or design token is used
+  file_list    → list all files in the session
 
-External tools:
-  web_search   → look up a specific Tailwind class behavior, CSS property,
-                 or animation technique
-
-Tool call format:
-```json
-{
-  "tool_name": "file_read",
-  "args": { "path": "frontend/src/components/ui/Button.tsx" }
-}
-```
+You have NO other tools. Do NOT attempt to call web_search or any unlisted tool.
 
 Always read the component you are styling before modifying its classes.
 

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   Home, MessageSquare, Brain, Wrench, type LucideIcon,
@@ -25,8 +25,10 @@ const NAV_ITEMS: NavItem[] = [
 
 export const Sidebar = () => {
   const [isHovered, setIsHovered] = useState(false);
-  // const setManagerOpen = useNoteStore(state => state.setManagerOpen);
-  const isExpanded = isHovered;
+  const location = useLocation();
+  // Lock the sidebar collapsed on code workspace pages so it doesn't push the 3-panel layout
+  const isWorkspace = location.pathname.startsWith('/code-workspace/');
+  const isExpanded = isWorkspace ? false : isHovered;
 
   return (
     <motion.aside
